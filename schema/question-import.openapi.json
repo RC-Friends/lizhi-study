@@ -1,0 +1,272 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Lizhi Study Question Import API",
+    "version": "1.0",
+    "description": "独立管理员接口。上传 manifest 所有文件后发布，成功立即在线启用，不需重启。"
+  },
+  "servers": [
+    {
+      "url": "https://study.example.com"
+    }
+  ],
+  "security": [
+    {
+      "importToken": []
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "importToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "QUESTION_IMPORT_TOKEN，不是考生 JWT"
+      }
+    }
+  },
+  "paths": {
+    "/api/admin/question-bank/schema": {
+      "get": {
+        "summary": "读取导入 JSON Schema",
+        "responses": {
+          "200": {
+            "description": "成功"
+          },
+          "401": {
+            "description": "需要独立管理令牌"
+          },
+          "404": {
+            "description": "接口未启用或版本未发布"
+          },
+          "422": {
+            "description": "校验失败，见 error.issues"
+          },
+          "503": {
+            "description": "配置、存储或数据库不可用"
+          }
+        }
+      }
+    },
+    "/api/admin/question-bank/validate": {
+      "post": {
+        "summary": "校验标准 JSON，不读取客户端图片",
+        "responses": {
+          "200": {
+            "description": "成功"
+          },
+          "401": {
+            "description": "需要独立管理令牌"
+          },
+          "404": {
+            "description": "接口未启用或版本未发布"
+          },
+          "422": {
+            "description": "校验失败，见 error.issues"
+          },
+          "503": {
+            "description": "配置、存储或数据库不可用"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "./question-import.schema.json"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/question-bank/releases/{version}/files": {
+      "parameters": [
+        {
+          "name": "version",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        {
+          "name": "path",
+          "in": "query",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "questions.jsonl 或 assets/images/摘要前两位/完整摘要.png 等"
+        }
+      ],
+      "put": {
+        "summary": "上传一个不可变文件，相同内容重试可复用",
+        "responses": {
+          "200": {
+            "description": "成功"
+          },
+          "401": {
+            "description": "需要独立管理令牌"
+          },
+          "404": {
+            "description": "接口未启用或版本未发布"
+          },
+          "422": {
+            "description": "校验失败，见 error.issues"
+          },
+          "503": {
+            "description": "配置、存储或数据库不可用"
+          },
+          "201": {
+            "description": "文件已保存"
+          },
+          "413": {
+            "description": "超过文件大小限制"
+          },
+          "415": {
+            "description": "仅接受二进制文件媒体类型"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/question-bank/releases/{version}/publish": {
+      "parameters": [
+        {
+          "name": "version",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      ],
+      "post": {
+        "summary": "校验所有文件，发布并原子切换在线题库",
+        "responses": {
+          "200": {
+            "description": "成功"
+          },
+          "401": {
+            "description": "需要独立管理令牌"
+          },
+          "404": {
+            "description": "接口未启用或版本未发布"
+          },
+          "422": {
+            "description": "校验失败，见 error.issues"
+          },
+          "503": {
+            "description": "配置、存储或数据库不可用"
+          },
+          "201": {
+            "description": "新版本已发布并在线生效"
+          },
+          "409": {
+            "description": "必须保留当前全部题目及原内容"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "format",
+                  "version",
+                  "files",
+                  "questions",
+                  "images"
+                ],
+                "properties": {
+                  "format": {
+                    "const": 1
+                  },
+                  "version": {
+                    "type": "string"
+                  },
+                  "questions": {
+                    "type": "integer"
+                  },
+                  "images": {
+                    "type": "integer"
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "path",
+                        "bytes",
+                        "sha256"
+                      ],
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "bytes": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "sha256": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{64}$"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/admin/question-bank/releases/{version}": {
+      "parameters": [
+        {
+          "name": "version",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      ],
+      "get": {
+        "summary": "查询版本是否发布和当前是否生效，不返回答案库",
+        "responses": {
+          "200": {
+            "description": "成功"
+          },
+          "401": {
+            "description": "需要独立管理令牌"
+          },
+          "404": {
+            "description": "接口未启用或版本未发布"
+          },
+          "422": {
+            "description": "校验失败，见 error.issues"
+          },
+          "503": {
+            "description": "配置、存储或数据库不可用"
+          }
+        }
+      }
+    }
+  }
+}

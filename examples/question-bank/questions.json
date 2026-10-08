@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "1.0",
+  "bankId": "lizhi-example",
+  "questions": [
+    {
+      "id": "arithmetic-001",
+      "module": "数量关系",
+      "submodule": "数学运算",
+      "stem": "每本练习册 12 元，购买两本共需要多少元？",
+      "options": {"A": "12 元", "B": "18 元", "C": "20 元", "D": "24 元"},
+      "answer": "D",
+      "analysis": "单价乘以数量：12 × 2 = 24 元，因此选 D。",
+      "source": {"type": "模拟题", "title": "栗知自编导入范例", "year": 2026},
+      "knowledgePoints": ["单价与总价"]
+    },
+    {
+      "id": "visual-001",
+      "module": "判断推理",
+      "submodule": "图形推理",
+      "stem": "观察图中的三组圆点。按相同规律，下一组应该有多少个圆点？",
+      "options": {"A": "1 个", "B": "2 个", "C": "3 个", "D": "4 个"},
+      "answer": "D",
+      "analysis": "前三组分别有 1、2、3 个圆点，每次增加 1 个，因此下一组为 4 个。",
+      "images": [{"path": "images/dots.png", "role": "stem"}],
+      "source": {"type": "模拟题", "title": "栗知自编导入范例"},
+      "tags": ["图形数量规律"]
+    },
+    {
+      "id": "data-001",
+      "module": "资料分析",
+      "submodule": "增长率",
+      "material": "某自习室第一周借出练习册 10 本，第二周借出 15 本。图中为两周借阅数量。",
+      "stem": "第二周借阅量相对第一周增长了多少？",
+      "options": {"A": "25%", "B": "40%", "C": "50%", "D": "60%"},
+      "answer": "C",
+      "analysis": "增长率 =（现期量 − 基期量）÷ 基期量 =（15 − 10）÷ 10 = 50%。",
+      "images": [{"path": "images/loans.png", "role": "material"}],
+      "source": {"type": "模拟题", "title": "栗知自编导入范例"}
+    }
+  ]
+}

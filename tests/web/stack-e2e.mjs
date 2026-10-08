@@ -5,6 +5,7 @@ import os from 'node:os';
 import { chromium } from 'playwright-core';
 import { QuestionBank } from '../../server/bank.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
+import { execFileSync } from 'node:child_process';
 
 const base=process.env.E2E_BASE_URL, password=process.env.E2E_PASSWORD;
 if(!base || !['127.0.0.1','localhost'].includes(new URL(base).hostname) || !password) throw new Error('Use E2E_BASE_URL pointing to an isolated loopback stack and its E2E_PASSWORD.');
@@ -61,5 +62,17 @@ try{
  await setup(mobile,{mode:'jev',images:'visual',count:2});await images(mobile);await answer(mobile,'A','锁定答案，轮到 AI');await visible(mobile,'.probabilities');await screenshot(mobile,'mobile-jev');await mobile.getByRole('button',{name:'确认，下一题',exact:true}).click();await visible(mobile,'.human-submit');await mobile.getByRole('button',{name:'结束本场'}).click();await mobile.getByRole('button',{name:'结束并查看报告'}).click();await visible(mobile,'.report-page');assert.equal((await state(mobile)).scores.completed,1);await home(mobile);
  await setup(mobile,{mode:'llm',images:'visual',count:1});await images(mobile);await mobile.getByRole('heading',{name:'AI 已交卷，等你。'}).waitFor();await answer(mobile,'C','提交答案，查看 AI');await visible(mobile,'.timing-comparison');await screenshot(mobile,'mobile-timing');await mobile.getByRole('button',{name:'完成对战，查看战报'}).click();await visible(mobile,'.report-page');
  checks.push('guest privacy, 390px navigation without overflow, image questions, JEV probabilities and early finish, mobile LLM timing/report');
+ if(process.env.E2E_IMPORT_SOURCE && process.env.E2E_IMPORT_TOKEN){
+  await home(mobile);await nav(mobile,'开始练习').click();await visible(mobile,'.lh-setup');
+  const beforeImport=await mobile.evaluate(async()=>(await fetch('/api/catalog')).json());
+  const published=JSON.parse(execFileSync(process.execPath,['scripts/publish-question-import.mjs',`--source=${process.env.E2E_IMPORT_SOURCE}`,`--url=${base}`],
+    {encoding:'utf8',env:{...process.env,QUESTION_IMPORT_TOKEN:process.env.E2E_IMPORT_TOKEN},timeout:120000}));
+  assert.equal(published.active,true);assert.equal(published.restartRequired,false);
+  await mobile.locator('.lh-availability strong').filter({hasText:String(beforeImport.bank.total+3)}).waitFor();
+  // Compact mobile chips intentionally hide their count; the visible
+  // availability total above verifies the user-facing update.
+  assert.equal(await mobile.locator('.module-chips button').filter({hasText:'数量关系'}).locator('span').textContent(),String(beforeImport.bank.modules.find(m=>m.name==='数量关系').count+1));
+  await screenshot(mobile,'mobile-live-import');checks.push('operator CLI uploads through Nginx; active study UI refreshes catalog and availability without reload or backend restart');
+ }
  assert.deepEqual(errors,[]);assert.deepEqual(failed,[]);await fs.writeFile('test-results/stack-results.json',JSON.stringify({passed:true,checks,pageErrors:errors,failedRequests:failed,paidModelCalls:0},null,2));console.log(JSON.stringify({passed:true,checks,pageErrors:errors,failedRequests:failed}));
 }catch(error){await page?.screenshot({path:'test-results/stack-failure.png',fullPage:true}).catch(()=>{});await fs.writeFile('test-results/stack-failure.json',JSON.stringify({error:error.message,errors,failed},null,2));throw error;}finally{await browser.close();}

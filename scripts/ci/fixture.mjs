@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { MODULES } from '../../server/bank.mjs';
-import { question } from '../../tests/web/fixtures.mjs';
 import { packageResources } from '../package-resources.mjs';
+import { compileImport } from '../../server/question-import.mjs';
 
 // Self-contained synthetic questions: CI never downloads third-party questions.
 export function makeFixture(root) {
@@ -12,14 +12,13 @@ export function makeFixture(root) {
   const relative = `assets/images/${digest.slice(0, 2)}/${digest}.png`;
   fs.mkdirSync(path.dirname(path.join(root, relative)), { recursive: true });
   fs.writeFileSync(path.join(root, relative), image);
-  const rows = MODULES.flatMap((module, m) => Array.from({ length: 12 }, (_, i) => ({
-    ...question, id: 'xc_' + createHash('sha256').update(`${m}:${i}`).digest('hex').slice(0, 24),
+  const questions = MODULES.flatMap((module, m) => Array.from({ length: 12 }, (_, i) => ({
+    id: `test-${m}-${i}`,
     module, stem: `合成验收题 ${m + 1}-${i + 1}：两本练习册共多少钱？`,
-    stem_html: `<p>合成验收题 ${m + 1}-${i + 1}：两本练习册共多少钱？</p>`
-      + (i % 2 === 0 ? `<img src="${relative}" alt="合成测试图片" width="48" height="48">` : ''),
-    images: i % 2 === 0 ? [{ path: relative, role: 'stem', kind: 'image', width: 1, height: 1 }] : [],
-    analysis: '12 × 2 = 24 元。', analysis_html: '<p>12 × 2 = 24 元。</p>',
+    material: '每本练习册 12 元。', options: { A: '12 元', B: '18 元', C: '20 元', D: '24 元' }, answer: 'D',
+    images: i % 2 === 0 ? [{ path: relative, role: 'stem' }] : [], analysis: '12 × 2 = 24 元。',
   })));
+  const rows = compileImport({ schemaVersion: '1.0', bankId: 'ci-fixture', questions }, new Map([[relative, { path: relative, width: 1, height: 1 }]]));
   const dataPath = path.join(root, 'questions.jsonl'), bundle = path.join(root, 'bundle');
   fs.writeFileSync(dataPath, rows.map(q => JSON.stringify(q)).join('\n') + '\n');
   packageResources({ dataPath, imagesPath: path.join(root, 'assets/images'), output: bundle });

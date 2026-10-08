@@ -46,6 +46,7 @@ export function loadConfig(overrides = {}) {
     resourceDriver: e.RESOURCE_DRIVER || (e.S3_ENDPOINT ? 's3' : 'files'),
     s3: { endpoint: e.S3_ENDPOINT || '', bucket: e.S3_BUCKET || 'xingce-resources', region: e.S3_REGION || 'us-east-1',
       prefix: e.S3_PREFIX || 'question-resources', accessKey: e.S3_ACCESS_KEY_ID || '', secretKey: e.S3_SECRET_ACCESS_KEY || '' },
+    questionImport: { token: e.QUESTION_IMPORT_TOKEN || '', accessKey: e.QUESTION_IMPORT_S3_ACCESS_KEY_ID || '', secretKey: e.QUESTION_IMPORT_S3_SECRET_ACCESS_KEY || '' },
     storageDriver: e.STORAGE_DRIVER || (e.DATABASE_URL ? 'postgres' : 'files'),
     databaseUrl: e.DATABASE_URL || '',
     redisUrl: e.REDIS_URL || '',

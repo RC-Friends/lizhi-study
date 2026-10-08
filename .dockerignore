@@ -19,3 +19,8 @@
 !deploy/
 !deploy/nginx/
 !deploy/nginx/**
+
+!schema/
+!schema/**
+!scripts/import-questions.mjs
+!scripts/publish-question-import.mjs

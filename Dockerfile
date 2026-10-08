@@ -9,7 +9,8 @@ WORKDIR /app
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json ./
 COPY server ./server
-COPY scripts/import-legacy.mjs scripts/package-resources.mjs scripts/upload-resources.mjs ./scripts/
+COPY schema ./schema
+COPY scripts/import-legacy.mjs scripts/package-resources.mjs scripts/upload-resources.mjs scripts/import-questions.mjs scripts/publish-question-import.mjs ./scripts/
 USER node
 EXPOSE 3210
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \

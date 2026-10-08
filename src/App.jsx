@@ -272,8 +272,10 @@ export default function App() {
         if (selected.includeMastered) query.set(`${kind}Mastered`, String(selected.includeMastered));
       }
       // All panels share one database snapshot and one committed revision.
-      const { history, wrong, bookmarks, ...dashboard } = await api(`/api/${account ? 'learning' : 'public'}/overview?${query}`);
+      const [overview, nextCatalog] = await Promise.all([api(`/api/${account ? 'learning' : 'public'}/overview?${query}`), api('/api/catalog')]);
+      const { history, wrong, bookmarks, ...dashboard } = overview;
       if (request !== hubRequest.current || filterKey !== JSON.stringify(filters.current)) return;
+      setCatalog(nextCatalog);
       hubRevision.current = dashboard.dataRevision || null;
       pages.current = { history: 1, wrong: 1, bookmarks: 1 };
       setHub({ ...dashboard, history: history.items, wrong: wrong?.items || [], bookmarks: bookmarks?.items || [], pages: {

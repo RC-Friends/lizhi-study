@@ -9,7 +9,7 @@ if (fs.existsSync(out)) throw new Error('输出目录已存在，拒绝覆盖已
 for (const name of ['SITE_PASSWORD','JWT_SECRET','DATABASE_URL','POSTGRES_PASSWORD','REDIS_URL','REDIS_PASSWORD','QUESTION_RESOURCE_VERSION','S3_ACCESS_KEY_ID','S3_SECRET_ACCESS_KEY','SEAWEEDFS_CONFIG_FILE']) if (!env[name]) throw new Error(`配置缺少 ${name}`);
 const secret = (name, data) => ({ apiVersion:'v1',kind:'Secret',metadata:{name,namespace:'xingce'},type:'Opaque',stringData:data });
 const backendKeys = ['SITE_PASSWORD','JWT_SECRET','JWT_TTL_DAYS','LEARNER_NAME','PUBLIC_URL','DATABASE_URL','REDIS_URL','REDIS_PREFIX','QUESTION_RESOURCE_VERSION','S3_BUCKET','S3_REGION','S3_PREFIX','S3_ACCESS_KEY_ID','S3_SECRET_ACCESS_KEY'];
-const backendEnv = Object.fromEntries(Object.entries(env).filter(([key])=>backendKeys.includes(key) || /^(LLM_|JEV_|VISION_)/.test(key)));
+const backendEnv = Object.fromEntries(Object.entries(env).filter(([key])=>backendKeys.includes(key) || /^(LLM_|JEV_|VISION_|QUESTION_IMPORT_)/.test(key)));
 const secrets = {apiVersion:'v1',kind:'List',items:[secret('xingce-backend',backendEnv),secret('xingce-postgres',{POSTGRES_PASSWORD:env.POSTGRES_PASSWORD}),secret('xingce-redis',{REDIS_PASSWORD:env.REDIS_PASSWORD}),secret('xingce-s3',{'s3.json':fs.readFileSync(env.SEAWEEDFS_CONFIG_FILE,'utf8')})]};
 const app = JSON.parse(fs.readFileSync('deploy/kubernetes/app.json','utf8'));
 for (const item of app.items) if(item.kind==='Deployment') item.spec.template.spec.containers[0].image=values[item.metadata.name+'-image'];

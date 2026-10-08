@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/RC-CHN/lizhi-study/schema/question-import.schema.json",
+  "title": "Lizhi Study question import 1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "bankId", "questions"],
+  "properties": {
+    "schemaVersion": {"const": "1.0"},
+    "bankId": {"type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$"},
+    "questions": {"type": "array", "minItems": 1, "maxItems": 20000, "items": {"$ref": "#/$defs/question"}}
+  },
+  "$defs": {
+    "text": {"type": "string", "maxLength": 100000},
+    "question": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "module", "stem", "options", "answer", "analysis"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$"},
+        "module": {"enum": ["政治理论", "常识判断", "言语理解", "数量关系", "判断推理", "资料分析"]},
+        "submodule": {"type": "string", "maxLength": 100},
+        "stem": {"type": "string", "minLength": 1, "maxLength": 100000},
+        "material": {"$ref": "#/$defs/text"},
+        "options": {
+          "type": "object", "minProperties": 2, "maxProperties": 6, "additionalProperties": false,
+          "patternProperties": {"^[A-F]$": {"$ref": "#/$defs/text"}}
+        },
+        "answer": {"enum": ["A", "B", "C", "D", "E", "F"]},
+        "analysis": {"type": "string", "minLength": 1, "maxLength": 100000},
+        "images": {
+          "type": "array", "maxItems": 64,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["path", "role"],
+            "properties": {
+              "path": {"type": "string", "minLength": 1, "maxLength": 300},
+              "role": {"enum": ["stem", "material", "analysis", "option_A", "option_B", "option_C", "option_D", "option_E", "option_F"]},
+              "kind": {"enum": ["image", "formula"]}
+            }
+          }
+        },
+        "source": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "type": {"enum": ["真题", "模拟题"]},
+            "title": {"type": "string", "maxLength": 300},
+            "url": {"type": "string", "maxLength": 2000},
+            "year": {"type": ["integer", "null"], "minimum": 1900, "maximum": 2200},
+            "province": {"type": "string", "maxLength": 100}
+          }
+        },
+        "tags": {"type": "array", "maxItems": 50, "uniqueItems": true, "items": {"type": "string", "maxLength": 100}},
+        "knowledgePoints": {"type": "array", "maxItems": 50, "uniqueItems": true, "items": {"type": "string", "maxLength": 100}}
+      }
+    }
+  }
+}

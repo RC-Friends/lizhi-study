@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { parseEnv } from 'node:util';
 import { randomBytes } from 'node:crypto';
 import { makeFixture } from './fixture.mjs';
+import { prepareQuestionImport } from '../import-questions.mjs';
 
 // Only this newly generated project is ever stopped or removed.
 const project = `lizhi-ci-${randomBytes(6).toString('hex')}`;
@@ -25,6 +26,12 @@ function run(command, args, { capture = false, env = {}, input, allowFailure = f
 }
 run(process.execPath, ['scripts/prepare-stack.mjs', `--bundle=${bundle}`, `--output=${envFile}`, `--secrets-dir=${secrets}`]);
 const env = parseEnv(fs.readFileSync(envFile, 'utf8'));
+const publisherCredentials = JSON.parse(fs.readFileSync(path.join(secrets, 'seaweedfs-publisher.json')));
+Object.assign(env, { QUESTION_IMPORT_TOKEN: randomBytes(32).toString('hex'), QUESTION_IMPORT_S3_ACCESS_KEY_ID: publisherCredentials.accessKey,
+  QUESTION_IMPORT_S3_SECRET_ACCESS_KEY: publisherCredentials.secretKey });
+fs.writeFileSync(envFile, Object.entries(env).map(([key, value]) => `${key}=${JSON.stringify(value)}`).join('\n') + '\n', { mode: 0o600 });
+const importBundle = path.join(root, 'online-import');
+prepareQuestionImport({ input: 'examples/question-bank/questions.json', base: bundle, output: importBundle });
 // Avoid ambient shell variables selecting existing images or application ports.
 Object.assign(env, { COMPOSE_PROJECT_NAME: project, FRONTEND_IMAGE: `${project}-frontend:ci`, BACKEND_IMAGE: `${project}-backend:ci` });
 const override = path.join(root, 'compose.ci.yaml');
@@ -47,20 +54,23 @@ try {
   compose(['build', '--quiet']);
   compose(['up', '-d', '--wait', '--wait-timeout', '180', 'database', 'redis', 'seaweedfs']);
   const database = port('database', 5432), redis = port('redis', 6379), s3 = port('seaweedfs', 8333);
-  for (const db of ['xingce_test_legacy', 'xingce_test_distributed']) compose(['exec', '-T', 'database', 'createdb', '-U', 'xingce', db]);
+  for (const db of ['xingce_test_legacy', 'xingce_test_distributed', 'xingce_test_import']) compose(['exec', '-T', 'database', 'createdb', '-U', 'xingce', db]);
   const connection = db => `postgresql://xingce:${env.POSTGRES_PASSWORD}@${database}/${db}`;
   test('postgres', { TEST_DATABASE_URL: connection('xingce_test_legacy') });
   test('distributed', { TEST_DATABASE_URL: connection('xingce_test_distributed'), TEST_REDIS_URL: `redis://:${env.REDIS_PASSWORD}@${redis}/1` });
   const publisher = JSON.parse(fs.readFileSync(path.join(secrets, 'seaweedfs-publisher.json'), 'utf8'));
-  test('seaweedfs', {
+  const s3Variables = {
     TEST_S3_ENDPOINT: `http://${s3}`, TEST_S3_BUCKET: env.S3_BUCKET,
     TEST_S3_READER_KEY: env.S3_ACCESS_KEY_ID, TEST_S3_READER_SECRET: env.S3_SECRET_ACCESS_KEY,
     TEST_S3_PUBLISHER_KEY: publisher.accessKey, TEST_S3_PUBLISHER_SECRET: publisher.secretKey,
-  });
+  };
+  test('seaweedfs', s3Variables);
+  test('imports', { ...s3Variables, TEST_DATABASE_URL: connection('xingce_test_import'), TEST_REDIS_URL: `redis://:${env.REDIS_PASSWORD}@${redis}/2` });
   compose(['run', '--rm', '--no-deps', '-T', '-v', `${bundle}:/bundle:ro`, 'backend',
     'node', 'scripts/upload-resources.mjs', '--source=/bundle', '--credentials-stdin'], { input: JSON.stringify(publisher) });
   compose(['up', '-d', '--wait', '--wait-timeout', '180', '--scale', 'backend=2']);
-  test('stack', { E2E_BASE_URL: `http://${port('frontend', 8080)}`, E2E_PASSWORD: env.SITE_PASSWORD, E2E_BANK_PATH: dataPath });
+  test('stack', { E2E_BASE_URL: `http://${port('frontend', 8080)}`, E2E_PASSWORD: env.SITE_PASSWORD, E2E_BANK_PATH: dataPath,
+    E2E_IMPORT_SOURCE: importBundle, E2E_IMPORT_TOKEN: env.QUESTION_IMPORT_TOKEN });
   passed = true;
 } finally {
   // Print failure diagnostics with generated credentials redacted. Never attach
@@ -68,7 +78,7 @@ try {
   if (!passed) {
     let logs = compose(['logs', '--tail', '60'], { capture: true, allowFailure: true }) || '';
     const publisher = JSON.parse(fs.readFileSync(path.join(secrets, 'seaweedfs-publisher.json'), 'utf8'));
-    const privateValues = [...Object.entries(env).filter(([key]) => /PASSWORD|SECRET|KEY|DATABASE_URL|REDIS_URL/.test(key)).map(([, value]) => value), ...Object.values(publisher)];
+    const privateValues = [...Object.entries(env).filter(([key]) => /PASSWORD|SECRET|KEY|TOKEN|DATABASE_URL|REDIS_URL/.test(key)).map(([, value]) => value), ...Object.values(publisher)];
     for (const value of privateValues.filter(v => v?.length >= 8)) logs = logs.replaceAll(value, '[redacted]');
     process.stderr.write(logs + '\n');
   }

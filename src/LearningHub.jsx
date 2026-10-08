@@ -81,7 +81,7 @@ export function PracticeSetup({ catalog, profile = {}, busy, error, onStart, onA
     let active = true; setChecking(true); setAvailability(null); setAvailabilityError('');
     const timer = setTimeout(async () => { try { const next = await availabilityRef.current({ mode, modules, source, images, scope }); if (active) setAvailability(next); } catch { if (active) setAvailabilityError('暂时无法预览题量，可直接尝试组卷。'); } finally { if (active) setChecking(false); } }, 250);
     return () => { active = false; clearTimeout(timer); };
-  }, [mode, modules.join('|'), source, images, scope, availabilityAttempt]);
+  }, [mode, modules.join('|'), source, images, scope, availabilityAttempt, catalog?.resourceVersion]);
   const toggleModule = name => setModules(current => current.includes(name) ? current.filter(item => item !== name) : [...current, name]);
   const valid = modules.length > 0 && Number.isInteger(count) && count >= 1 && count <= 100 && (mode === 'practice' || demo || provider?.ready) && !checking && (availability == null || count <= availability.count);
   return <div className="lh-practice"><div className="lh-page-heading"><div><span className="lh-kicker">MAKE TODAY COUNT</span><h1>今天，练一点什么？</h1><p>按自己的节奏组一张卷子。每次提交后看解析，随时离开，下次接着做。</p></div><Chestnut size={74} /></div>

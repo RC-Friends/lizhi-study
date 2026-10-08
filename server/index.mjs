@@ -3,12 +3,15 @@ import { MatchService } from './matches.mjs';
 import { createApp } from './app.mjs';
 import { DistributedRuntime } from './distributed.mjs';
 import { loadQuestionResources } from './resource-loader.mjs';
+import { LiveResources, configuredResourceVersion } from './live-resources.mjs';
 
 const config = loadConfig();
 if (config.storageDriver === 'postgres' && (!config.databaseUrl || !config.redisUrl)) throw new Error('无状态后端需要 DATABASE_URL 和 REDIS_URL。');
 if (process.env.NODE_ENV === 'production' && config.storageDriver !== 'postgres') throw new Error('生产环境需要 PostgreSQL 和 Redis。');
+config.resourceVersion = await configuredResourceVersion(config);
 const { bank, resources } = await loadQuestionResources(config);
-const runtime = config.storageDriver === 'postgres' ? await DistributedRuntime.open(bank, config) : null;
+const resourceManager = resources && config.storageDriver === 'postgres' ? new LiveResources(config, bank, resources) : null;
+const runtime = config.storageDriver === 'postgres' ? await DistributedRuntime.open(bank, config, { resourceManager }) : null;
 const service = new MatchService(bank, config, { persist: !runtime });
 const app = createApp(bank, service, config, { runtime });
 const server = app.listen(config.port, config.host, error => {

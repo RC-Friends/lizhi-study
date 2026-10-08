@@ -11,7 +11,7 @@ const source = `lizhi-study-v${version}-source.tar.gz`;
 execFileSync('git', ['archive', '--format=tar.gz', `--prefix=lizhi-study-v${version}/`, `--output=${path.join(output, source)}`, 'HEAD']);
 const deploy = `lizhi-study-v${version}-deploy.tar.gz`;
 execFileSync('git', ['archive', '--format=tar.gz', `--prefix=lizhi-study-v${version}/`, `--output=${path.join(output, deploy)}`, 'HEAD',
-  'compose.yaml', 'deploy', 'scripts', 'server', 'package.json', 'package-lock.json', '.env.example', 'README.md', 'docs', 'sources.json', 'requirements.txt', 'schema']);
+  'compose.yaml', 'deploy', 'scripts', 'server', 'package.json', 'package-lock.json', '.env.example', 'README.md', 'docs', 'sources.json', 'requirements.txt', 'schema', 'examples']);
 const frontend = `lizhi-study-v${version}-frontend.tar.gz`;
 execFileSync('tar', ['-czf', path.join(output, frontend), '-C', 'dist', '.']);
 if (process.env.IMAGE_BASE) {

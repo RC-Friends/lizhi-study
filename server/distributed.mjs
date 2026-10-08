@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS study_jobs (
 CREATE INDEX IF NOT EXISTS study_jobs_pending ON study_jobs(status, created_at);
 CREATE TABLE IF NOT EXISTS study_state (id integer PRIMARY KEY CHECK(id=1), revision bigint NOT NULL DEFAULT 0);
 INSERT INTO study_state(id) VALUES(1) ON CONFLICT DO NOTHING;
-INSERT INTO study_schema_migrations(version) VALUES (2) ON CONFLICT DO NOTHING;`;
+ALTER TABLE study_state ADD COLUMN IF NOT EXISTS resource_version text;
+INSERT INTO study_schema_migrations(version) VALUES (2), (3) ON CONFLICT DO NOTHING;`;
 const stamp = () => new Date().toISOString();
 const studyStamp = match => JSON.stringify([match.status, match.index, match.finishedAt, match.rounds.map(round =>
   [round.phase, round.humanChoice, round.humanCorrect, round.aiCorrect, round.completedAt, round.pausedAt])]);
@@ -37,9 +38,11 @@ export class DistributedRuntime {
         const compatible = await client.query('SELECT pg_try_advisory_xact_lock(1937012089, 1) AS acquired');
         if (!compatible.rows[0].acquired) throw new StorageError('旧版单进程应用或导入程序仍在运行，请先停止它。');
         const versions = await client.query("SELECT to_regclass('study_schema_migrations') AS name");
-        if (versions.rows[0].name && (await client.query('SELECT max(version) AS version FROM study_schema_migrations')).rows[0].version > 2) throw new StorageError('数据库版本高于当前应用。');
+        if (versions.rows[0].name && (await client.query('SELECT max(version) AS version FROM study_schema_migrations')).rows[0].version > 3) throw new StorageError('数据库版本高于当前应用。');
         await client.query(SCHEMA); await client.query(JOB_SCHEMA);
+        if (runtime.resourceManager) await client.query('UPDATE study_state SET resource_version=COALESCE(resource_version,$1) WHERE id=1', [config.resourceVersion]);
       });
+      runtime.resourcesReady = true;
       await Promise.all([runtime.redis.connect(), runtime.subscriber.connect()]);
       await runtime.subscriber.subscribe(runtime.channel, message => {
         for (const callback of runtime.listeners.get(message) || []) callback();
@@ -49,8 +52,9 @@ export class DistributedRuntime {
       return runtime;
     } catch (error) { await runtime.close(); if (error instanceof StorageError) throw error; throw new StorageError('无法启动后端，请检查 PostgreSQL、Redis 和题库版本配置。'); }
   }
-  constructor(bank, config, { providers = {}, coachProvider, worker = true } = {}) {
+  constructor(bank, config, { providers = {}, coachProvider, worker = true, resourceManager } = {}) {
     this.bank = bank; this.config = config; this.workerEnabled = worker; this.coachProvider = coachProvider;
+    this.resourceManager = resourceManager;
     this.providers = { llm: runLlm, jev: runJev, demo: runDemo, ...providers };
     this.id = crypto.randomUUID(); this.closed = false; this.listeners = new Map(); this.tasks = new Map();
     this.prefix = config.redisPrefix || 'xingce:'; this.channel = this.prefix + 'changed';
@@ -64,10 +68,43 @@ export class DistributedRuntime {
     this.redis.on('error', () => {}); this.subscriber.on('error', () => {});
   }
   async transaction(work, { readOnly = false } = {}) {
-    const client = await this.pool.connect();
-    try { await client.query(readOnly ? 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' : 'BEGIN'); if (!readOnly) await client.query(LOCK); const value = await work(client); await client.query('COMMIT'); return value; }
-    catch (error) { await client.query('ROLLBACK').catch(() => {}); throw error; }
-    finally { client.release(); }
+    for (let attempt = 0; attempt < 4; attempt++) {
+      // Download outside the DB lock. Check the pointer again IN the transaction
+      // to fence a concurrent activation; retry before running any domain work.
+      const questions = this.resourcesReady && this.resourceManager ? await this.resourceManager.acquireCurrent(this.pool) : null;
+      let client;
+      try {
+        client = await this.pool.connect();
+        await client.query(readOnly ? 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' : 'BEGIN');
+        if (!readOnly) await client.query(LOCK);
+        if (questions && questions.version !== await this.resourceManager.currentVersion(client)) {
+          await client.query('ROLLBACK'); continue;
+        }
+        client.questionContext = questions;
+        const value = await work(client); await client.query('COMMIT'); return value;
+      } catch (error) { if (client) await client.query('ROLLBACK').catch(() => {}); throw error; }
+      finally { if (client) { client.questionContext = null; client.release(); } questions?.release(); }
+    }
+    throw new StorageError('题库正在更新，请稍后重试。');
+  }
+  async withQuestions(work) {
+    if (!this.resourceManager) return work({ bank: this.bank, config: this.config, resources: this.config.questionResources, version: this.config.resourceVersion });
+    const entry = await this.resourceManager.acquireCurrent(this.pool);
+    try { return await work(entry); } finally { entry.release(); }
+  }
+  async activateResources(version) {
+    if (!this.resourceManager) throw new HttpError(503, '在线导入需要 PostgreSQL、Redis 和 SeaweedFS 资源模式。', 'activation_unavailable');
+    const next = await this.resourceManager.acquire(version);
+    try {
+      await this.transaction(async client => {
+        const current = client.questionContext;
+        if (current.version === version) return;
+        for (const [id, fingerprint] of current.bank.fingerprints) if (next.bank.fingerprints.get(id) !== fingerprint) throw new HttpError(409, `新题库必须保留现有题目 ${id}，请基于当前版本增量合并。`, 'question_conflict');
+        await client.query('UPDATE study_state SET resource_version=$1, revision=revision+1 WHERE id=1', [version]);
+      });
+      await this.notify('resource-version');
+      return { active: true, version, restartRequired: false };
+    } finally { next.release(); }
   }
   async health() {
     if (this.closed || !this.redis.isReady || !this.subscriber.isReady) throw new StorageError();
@@ -82,24 +119,25 @@ export class DistributedRuntime {
   async run(work, options = {}) {
     const changed = new Set();
     const operation = async client => {
+      const bank = client.questionContext?.bank || this.bank, config = client.questionContext?.config || this.config;
       const jobs = options.readOnly ? [] : (await client.query("SELECT id FROM study_jobs WHERE status IN ('queued','running')")).rows;
-      const pending = [], matches = new MatchService(this.bank, this.config, { persist: false, dispatch: job => pending.push(job) });
+      const pending = [], matches = new MatchService(bank, config, { persist: false, dispatch: job => pending.push(job) });
       const rows = options.matchId ? await client.query('SELECT payload FROM study_matches WHERE id=$1', [options.matchId])
         : await client.query('SELECT payload FROM study_matches ORDER BY created_at,id');
       const before = new Map();
-      for (const { payload } of rows.rows) { matches.matches.set(payload.id, validateMatch(payload, this.bank)); if (!options.readOnly) before.set(payload.id, studyStamp(payload)); }
+      for (const { payload } of rows.rows) { matches.matches.set(payload.id, validateMatch(payload, bank)); if (!options.readOnly) before.set(payload.id, studyStamp(payload)); }
       // Capacity is shared by all processes, including coach jobs.
       matches.requireCapacity = () => { if (jobs.length + pending.length >= this.config.maxConcurrent) throw new HttpError(429, '模型目前较忙，请稍后再试。'); };
       matches.save = match => { changed.add(match.id); if (matches.current(match)?.aiStatus === 'running') matches.current(match).aiCheckpointAt = stamp(); };
-      const learning = new LearningService(this.bank, matches, this.config, { persist: false });
+      const learning = new LearningService(bank, matches, config, { persist: false });
       learning.memo = new Map();
       const profiles = options.matchId ? [] : (await client.query('SELECT * FROM study_profiles')).rows;
       const annotations = options.matchId ? [] : (await client.query('SELECT * FROM study_annotations')).rows;
       learning.data.profiles = Object.fromEntries(profiles.map(row => [row.owner_id, row.payload]));
       for (const row of annotations) (learning.data.questions[row.owner_id] ||= {})[row.question_id] = row.payload;
-      validateLearning(learning.data, this.bank);
+      validateLearning(learning.data, bank);
       const edits = []; learning.save = (...args) => { learning.memo.clear(); edits.push(args); };
-      const coach = new CoachService(this.bank, matches, this.config);
+      const coach = new CoachService(bank, matches, config);
       const value = await work({ service: matches, learning, coach, client, jobs, pending });
       if (options.readOnly && (changed.size || edits.length || pending.length)) throw new Error('Read operation attempted to mutate state');
       let studyChanged = Boolean(edits.length);
@@ -131,7 +169,7 @@ export class DistributedRuntime {
     // An old computation can only populate its old key, never overwrite new data.
     return this.transaction(async client => {
       const dataRevision = await this.revision(client);
-      const cacheKey = this.prefix + 'read:v1:' + this.cacheBank + ':' + dataRevision + ':' + crypto.createHash('sha256').update(key).digest('hex');
+      const cacheKey = this.prefix + 'read:v1:' + (client.questionContext?.version || this.cacheBank) + ':' + dataRevision + ':' + crypto.createHash('sha256').update(key).digest('hex');
       if (this.redis.isReady) {
         const saved = await this.redis.withAbortSignal(AbortSignal.timeout(1500)).get(cacheKey).catch(() => null);
         if (saved) { try { return JSON.parse(saved); } catch {} }
@@ -226,8 +264,10 @@ export class DistributedRuntime {
     try {
       const match = await this.run(({ service }) => structuredClone(service.matches.get(job.match_id)), { matchId: job.match_id, readOnly: true });
       if (!await this.patchJob(job, () => {})) return;
-      if (job.kind === 'answer') await this.answer(job, match, controller);
-      else await this.coach(job, match, controller.signal);
+      await this.withQuestions(async context => {
+        if (job.kind === 'answer') await this.answer(job, match, controller, context);
+        else await this.coach(job, match, controller.signal, context);
+      });
     } catch (error) {
       await this.patchJob(job, ({ round }) => {
         if (job.kind === 'coach') { round.coachBusy = false; return; }
@@ -240,9 +280,9 @@ export class DistributedRuntime {
       if (job.kind === 'coach') await this.pool.query("UPDATE study_jobs SET status='interrupted' WHERE id=$1 AND worker=$2 AND status='done'", [job.id, this.id]).catch(() => {});
     } finally { clearInterval(heartbeat); }
   }
-  async answer(job, match, controller) {
+  async answer(job, match, controller, { bank, config }) {
     const signal = controller.signal;
-    const local = match.rounds[job.round_index], q = this.bank.byId.get(match.questionIds[job.round_index]);
+    const local = match.rounds[job.round_index], q = bank.byId.get(match.questionIds[job.round_index]);
     const fields = {}, started = Date.parse(local.aiAttemptStartedAt), previousMs = local.aiMs || 0;
     let chain = Promise.resolve(), dirty = false;
     const checkpoint = () => {
@@ -274,7 +314,7 @@ export class DistributedRuntime {
         // A manual retry can continue from the public explanation alone.
         savedContinuation: null, saveContinuation: () => {} };
       const result = match.settings.demo ? await this.providers.demo(q, match.settings.mode, context)
-        : match.settings.mode === 'jev' ? await this.providers.jev(q, this.config, context) : await this.providers.llm(q, this.config.llm, context);
+        : match.settings.mode === 'jev' ? await this.providers.jev(q, config, context) : await this.providers.llm(q, config.llm, context);
       signal.throwIfAborted();
       if (!Object.hasOwn(q.options, result.choice) || result.tool?.name !== 'submit_answer' || result.tool.arguments?.choice !== result.choice) throw new ProviderError('模型没有提交可验证的工具答案。');
       clearInterval(timer); await checkpoint();
@@ -286,9 +326,9 @@ export class DistributedRuntime {
       }, true);
     } finally { clearInterval(timer); await checkpoint().catch(() => {}); }
   }
-  async coach(job, match, signal) {
-    const service = new MatchService(this.bank, this.config, { persist: false });
-    const coach = new CoachService(this.bank, service, this.config, this.coachProvider ? { provider: this.coachProvider } : {});
+  async coach(job, match, signal, { bank, config }) {
+    const service = new MatchService(bank, config, { persist: false });
+    const coach = new CoachService(bank, service, config, this.coachProvider ? { provider: this.coachProvider } : {});
     const round = match.rounds[job.round_index]; round.coachBusy = false; round.coachTurns--;
     let content = '', dirty = false, chain = Promise.resolve();
     const checkpoint = () => { if (!dirty) return chain; dirty = false; const text = content;
@@ -306,5 +346,6 @@ export class DistributedRuntime {
     await Promise.allSettled([...this.tasks.values()].map(task => task.task));
     for (const client of [this.subscriber, this.redis]) if (client.isOpen) client.destroy();
     await this.pool.end().catch(() => {});
+    this.resourceManager?.close();
   }
 }

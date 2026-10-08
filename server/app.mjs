@@ -9,6 +9,7 @@ import { CoachService } from './coach.mjs';
 import { ProviderError } from './providers.mjs';
 import { defaultImagesPath } from './resources.mjs';
 import { imageMime } from './object-resources.mjs';
+import { questionImportRouter } from './question-import-api.mjs';
 
 export function createApp(bank, service, config, options = {}) {
   const app = express(), auth = createAuth(config);
@@ -18,7 +19,6 @@ export function createApp(bank, service, config, options = {}) {
   app.locals.learning = learning; app.locals.coach = coach;
   app.disable('x-powered-by');
   if (config.trustProxy) app.set('trust proxy', config.trustProxy);
-  app.use(express.json({ limit: '24kb' }));
   app.use((req, res, next) => {
     res.set('X-Content-Type-Options', 'nosniff'); res.set('Referrer-Policy', 'same-origin');
     res.set('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
@@ -48,6 +48,10 @@ export function createApp(bank, service, config, options = {}) {
     if (++item.count > count) throw new HttpError(429, '操作过于频繁，请稍后再试。', 'rate_limited');
   }
   const token = req => req.get('Authorization')?.match(/^Bearer ([^\s]+)$/)?.[1];
+  // Authenticate administrators before buffering large imports. Learner JWTs
+  // cannot access this router; normal study requests retain their small limit.
+  app.use('/api/admin/question-bank', questionImportRouter(bank, config, { limit, runtime }));
+  app.use(express.json({ limit: '24kb' }));
   const route = (handler, { readOnly = false, match = false, cache = false } = {}) => async (req, res) => {
     const work = ctx => handler(req, ctx);
     const value = runtime && cache ? await runtime.cached(`${req.viewer?.sub || 'public'}:${req.originalUrl}`, work)
@@ -72,7 +76,9 @@ export function createApp(bank, service, config, options = {}) {
   };
   app.get('/api/health/live', (_req, res) => res.json({ ok: true }));
   app.get('/api/health', async (_req, res) => {
-    try { await runtime?.health(); if (service.storage) await service.storage.health(); await config.questionResources?.health(); res.json({ ok: true, auth: 'jwt', guestAccess: true }); }
+    try { await runtime?.health(); if (service.storage) await service.storage.health();
+      if (runtime?.resourceManager) await runtime.withQuestions(({ resources }) => resources.health()); else await config.questionResources?.health();
+      res.json({ ok: true, auth: 'jwt', guestAccess: true }); }
     catch { res.status(503).json({ ok: false }); }
   });
   app.post('/api/login', async (req, res) => {
@@ -80,7 +86,10 @@ export function createApp(bank, service, config, options = {}) {
     const session = auth.login(req.body?.password);
     res.json(await run(({ learning }) => ({ ...session, profile: { ...session.profile, name: learning.profile(session.profile.id).nickname } })));
   });
-  app.get('/api/catalog', (_req, res) => res.json({ bank: bank.catalog(), providers: providerCatalog(config), coach: { name: '小栗', ready: Boolean(config.llm.key && config.llm.model) } }));
+  app.get('/api/catalog', async (_req, res) => {
+    const info = runtime ? await runtime.withQuestions(({ bank, version }) => ({ bank: bank.catalog(), resourceVersion: version })) : { bank: bank.catalog() };
+    res.json({ ...info, providers: providerCatalog(config), coach: { name: '小栗', ready: Boolean(config.llm.key && config.llm.model) } });
+  });
   app.get('/api/public/revision', async (_req, res) => res.json({ dataRevision: runtime ? await runtime.revision() : null }));
   app.get('/api/public/overview', route((req, { learning }) => overview(req, learning, true), { cache: true }));
   app.get('/api/public/dashboard', route((_req, { learning }) => learning.publicDashboard(), { cache: true }));
@@ -188,10 +197,12 @@ export function createApp(bank, service, config, options = {}) {
   if (config.questionResources) app.use('/assets/images', async (req, res) => {
     if (!['GET', 'HEAD'].includes(req.method)) throw new HttpError(405, '只支持读取题图。');
     const name = 'assets/images' + req.path;
-    const bytes = await config.questionResources.image(name);
-    const file = config.questionResources.files.get(name);
-    res.set({ 'Content-Type': imageMime(name), 'Cache-Control': 'public, max-age=2592000, immutable', ETag: `"${file.sha256}"` });
-    res.send(bytes);
+    const send = async resources => {
+      const bytes = await resources.image(name), file = resources.files.get(name);
+      res.set({ 'Content-Type': imageMime(name), 'Cache-Control': 'public, max-age=2592000, immutable', ETag: `"${file.sha256}"` });
+      res.send(bytes);
+    };
+    if (runtime?.resourceManager) await runtime.withQuestions(({ resources }) => send(resources)); else await send(config.questionResources);
   });
   else app.use('/assets/images', express.static(config.imagesPath || defaultImagesPath, { immutable: true, maxAge: '30d', dotfiles: 'deny', index: false, fallthrough: false }));
   if (config.serveFrontend !== false) {
