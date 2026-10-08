@@ -333,3 +333,14 @@ test('paused practice survives service restart and does not alter duel clocks', 
     assert.equal(duel.snapshot(duelMatch).current.paused, false); duel.shutdown();
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
+test('smart scope stores the server-computed composition and rejects unknown scopes', () => {
+  const service = make(() => { throw new Error('No model expected'); }, [question, { ...question, id: 'second' }]);
+  const created = service.create({ ...settings, mode: 'practice', scope: 'smart', count: 1, questionIds: [question.id] },
+    { ownerId: 'primary', allowedQuestionIds: [question.id], composition: { review: 1, weak: 0, extend: 0 } });
+  assert.equal(created.match.settings.scope, 'smart');
+  assert.deepEqual(created.match.settings.composition, { review: 1, weak: 0, extend: 0 });
+  assert.equal(created.match.current.question.id, question.id);
+  assert.throws(() => service.create({ ...settings, mode: 'practice', scope: 'hunch' }, { ownerId: 'primary', allowedQuestionIds: [question.id] }), /范围无效/);
+  const plain = service.create({ ...settings, mode: 'practice' }, { ownerId: 'primary', allowedQuestionIds: [question.id] });
+  assert.equal('composition' in plain.match.settings, false);
+});

@@ -112,11 +112,16 @@ export function createApp(bank, service, config, options = {}) {
   app.post('/api/matches', async (req, res) => {
     await limit(`create:${req.viewer.sub}`, 30, 600000);
     const result = await run(({ service, learning, coach }) => {
-      const input = req.body || {};
+      let input = req.body || {};
       if (!runtime && input.mode === 'llm' && service.jobs.size + coach.jobs.size >= config.maxConcurrent) throw new HttpError(429, '模型目前较忙，请稍后再试。');
-      return service.create({ ...input, name: learning.profile(req.viewer.sub).nickname }, {
-        ownerId: req.viewer.sub, allowedQuestionIds: learning.eligibleIds(input.scope || 'all', req.viewer.sub),
-      });
+      const scope = input.scope || 'all';
+      const options = { ownerId: req.viewer.sub, allowedQuestionIds: learning.eligibleIds(scope, req.viewer.sub) };
+      if (scope === 'smart') {
+        const plan = learning.smartPlan(input, req.viewer.sub);
+        input = { ...input, questionIds: plan.ids };
+        options.composition = plan.composition;
+      }
+      return service.create({ ...input, name: learning.profile(req.viewer.sub).nickname }, options);
     });
     res.status(201).json(result);
   });

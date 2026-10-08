@@ -138,3 +138,16 @@ test('all real model entry points share coaching capacity without blocking last-
   assert.equal(service.matches.get(jev.match.id).rounds[0].humanChoice, undefined, 'busy response does not lock the human answer');
   assert.equal((await request(`/api/matches/${llm.match.id}/next`, { token, body: { index: 0 } })).status, 200, 'finishing requires no additional model slot');
 });
+test('smart scope plans a deterministic weak-first paper through the API', async t => {
+  const { request, login } = await setup(t, {});
+  const token = await login();
+  const first = await (await request('/api/matches', { token, body: { ...settings, mode: 'practice' } })).json();
+  await request(`/api/matches/${first.match.id}/answer`, { token, body: { choice: 'A', index: 0 } });
+  await request(`/api/matches/${first.match.id}/finish`, { token, body: {} });
+  const response = await request('/api/matches', { token, body: { ...settings, mode: 'practice', scope: 'smart', count: 1 } });
+  assert.equal(response.status, 201);
+  const created = await response.json();
+  assert.equal(created.match.settings.scope, 'smart');
+  assert.deepEqual(created.match.settings.composition, { review: 1, weak: 0, extend: 0 });
+  assert.equal(created.match.current.question.id, question.id);
+});

@@ -170,7 +170,7 @@ export class MatchService {
     this.listeners.get(match.id).add(listener);
     return () => this.listeners.get(match.id)?.delete(listener);
   }
-  create(input, { ownerId, allowedQuestionIds = null } = {}) {
+  create(input, { ownerId, allowedQuestionIds = null, composition = null } = {}) {
     this.storage?.assertHealthy();
     const mode = input.mode;
     if (!['llm', 'jev', 'practice'].includes(mode)) throw new HttpError(400, '请选择自主练习、LLM 或 JEV 模式。');
@@ -179,8 +179,9 @@ export class MatchService {
     const catalog = providerCatalog(this.config);
     if (mode !== 'practice' && !demo && !catalog[mode].ready) throw new HttpError(409, `${mode === 'jev' ? 'JEV' : 'LLM'} 尚未配置服务端密钥。可先体验演示流程。`, 'provider_not_configured');
     const scope = input.scope || 'all';
-    if (!['all', 'unseen', 'wrong', 'bookmarked'].includes(scope) || (scope !== 'all' && allowedQuestionIds === null)) throw new HttpError(400, '练习范围无效，请重新组卷。');
+    if (!['all', 'unseen', 'wrong', 'bookmarked', 'smart'].includes(scope) || (scope !== 'all' && allowedQuestionIds === null)) throw new HttpError(400, '练习范围无效，请重新组卷。');
     const settings = { mode, demo, scope, modules: input.modules, count: input.count, source: input.source || 'all', images: input.images || 'mixed' };
+    if (scope === 'smart' && composition) settings.composition = composition;
     if (!demo && mode === 'llm') settings.generation = { thinking: this.config.llm.thinking || 'provider_default', reasoningEffort: this.config.llm.thinking === 'disabled' ? 'none' : this.config.llm.reasoningEffort || 'provider_default',
       maxTokens: this.config.llm.maxTokens, toolMaxTokens: this.config.llm.toolMaxTokens,
       imageMaxTokens: this.config.llm.imageMaxTokens || 32768, imageToolMaxTokens: this.config.llm.imageToolMaxTokens || 8192,
