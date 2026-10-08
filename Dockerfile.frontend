@@ -1,0 +1,23 @@
+FROM node:24-bookworm-slim AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY index.html vite.config.js ./
+COPY src ./src
+COPY public ./public
+RUN npm run build
+
+FROM nginxinc/nginx-unprivileged:1.28-alpine AS frontend
+COPY --from=build /app/dist /usr/share/nginx/html
+COPY deploy/nginx/default.conf.template /etc/nginx/templates/default.conf.template
+ENV BACKEND_HOST=backend BACKEND_PORT=3210 NGINX_ENVSUBST_OUTPUT_DIR=/tmp/nginx-conf
+# Only this generated include directory is writable at runtime.
+USER root
+COPY deploy/nginx/15-resolver.envsh /docker-entrypoint.d/15-resolver.envsh
+RUN chmod +x /docker-entrypoint.d/15-resolver.envsh
+RUN sed -i 's@include /etc/nginx/conf.d/\*.conf;@include /tmp/nginx-conf/*.conf;@' /etc/nginx/nginx.conf
+RUN sed -i 's/worker_processes  auto;/worker_processes  2;/' /etc/nginx/nginx.conf
+USER 101
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -q -O /dev/null http://127.0.0.1:8080/frontend-health || exit 1

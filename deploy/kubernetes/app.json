@@ -1,0 +1,294 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "backend",
+        "namespace": "xingce"
+      },
+      "spec": {
+        "selector": {
+          "app": "backend"
+        },
+        "ports": [
+          {
+            "port": 3210,
+            "targetPort": 3210
+          }
+        ],
+        "type": "ClusterIP"
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "backend",
+        "namespace": "xingce"
+      },
+      "spec": {
+        "replicas": 2,
+        "selector": {
+          "matchLabels": {
+            "app": "backend"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "backend"
+            }
+          },
+          "spec": {
+            "terminationGracePeriodSeconds": 30,
+            "containers": [
+              {
+                "name": "backend",
+                "image": "example.com/your-project/xingce-backend:VERSION",
+                "resources": {
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "128Mi"
+                  },
+                  "limits": {
+                    "memory": "1Gi"
+                  }
+                },
+                "securityContext": {
+                  "runAsNonRoot": true,
+                  "runAsUser": 1000,
+                  "readOnlyRootFilesystem": true,
+                  "allowPrivilegeEscalation": false,
+                  "capabilities": {
+                    "drop": [
+                      "ALL"
+                    ]
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "port": 3210,
+                    "path": "/api/health"
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 5
+                },
+                "livenessProbe": {
+                  "httpGet": {
+                    "port": 3210,
+                    "path": "/api/health/live"
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 5
+                },
+                "startupProbe": {
+                  "httpGet": {
+                    "port": 3210,
+                    "path": "/api/health/live"
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 5,
+                  "failureThreshold": 30
+                },
+                "env": [
+                  {
+                    "name": "NODE_ENV",
+                    "value": "production"
+                  },
+                  {
+                    "name": "HOST",
+                    "value": "0.0.0.0"
+                  },
+                  {
+                    "name": "PORT",
+                    "value": "3210"
+                  },
+                  {
+                    "name": "SERVE_FRONTEND",
+                    "value": "false"
+                  },
+                  {
+                    "name": "TRUST_PROXY",
+                    "value": "1"
+                  },
+                  {
+                    "name": "STORAGE_DRIVER",
+                    "value": "postgres"
+                  },
+                  {
+                    "name": "RESOURCE_DRIVER",
+                    "value": "s3"
+                  },
+                  {
+                    "name": "S3_ENDPOINT",
+                    "value": "http://seaweedfs:8333"
+                  }
+                ],
+                "envFrom": [
+                  {
+                    "secretRef": {
+                      "name": "xingce-backend"
+                    }
+                  }
+                ],
+                "ports": [
+                  {
+                    "containerPort": 3210
+                  }
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "tmp",
+                    "mountPath": "/tmp"
+                  }
+                ]
+              }
+            ],
+            "volumes": [
+              {
+                "name": "tmp",
+                "emptyDir": {
+                  "sizeLimit": "64Mi"
+                }
+              }
+            ]
+          }
+        },
+        "strategy": {
+          "type": "RollingUpdate",
+          "rollingUpdate": {
+            "maxSurge": 1,
+            "maxUnavailable": 0
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "frontend",
+        "namespace": "xingce"
+      },
+      "spec": {
+        "selector": {
+          "app": "frontend"
+        },
+        "ports": [
+          {
+            "port": 80,
+            "targetPort": 8080
+          }
+        ],
+        "type": "LoadBalancer"
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "frontend",
+        "namespace": "xingce"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "frontend"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "frontend"
+            }
+          },
+          "spec": {
+            "terminationGracePeriodSeconds": 30,
+            "containers": [
+              {
+                "name": "frontend",
+                "image": "example.com/your-project/xingce-frontend:VERSION",
+                "resources": {
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "128Mi"
+                  },
+                  "limits": {
+                    "memory": "1Gi"
+                  }
+                },
+                "securityContext": {
+                  "runAsNonRoot": true,
+                  "runAsUser": 101,
+                  "readOnlyRootFilesystem": true,
+                  "allowPrivilegeEscalation": false,
+                  "capabilities": {
+                    "drop": [
+                      "ALL"
+                    ]
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "port": 8080,
+                    "path": "/frontend-health"
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 5
+                },
+                "livenessProbe": {
+                  "httpGet": {
+                    "port": 8080,
+                    "path": "/frontend-health"
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 5
+                },
+                "env": [
+                  {
+                    "name": "BACKEND_HOST",
+                    "value": "backend"
+                  },
+                  {
+                    "name": "BACKEND_PORT",
+                    "value": "3210"
+                  }
+                ],
+                "ports": [
+                  {
+                    "containerPort": 8080
+                  }
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "tmp",
+                    "mountPath": "/tmp"
+                  }
+                ]
+              }
+            ],
+            "volumes": [
+              {
+                "name": "tmp",
+                "emptyDir": {
+                  "sizeLimit": "32Mi"
+                }
+              }
+            ]
+          }
+        },
+        "strategy": {
+          "type": "RollingUpdate",
+          "rollingUpdate": {
+            "maxSurge": 1,
+            "maxUnavailable": 0
+          }
+        }
+      }
+    }
+  ]
+}

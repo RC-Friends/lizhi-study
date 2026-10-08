@@ -1,0 +1,116 @@
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    image: ${FRONTEND_IMAGE:-xingce-frontend:local}
+    restart: unless-stopped
+    environment:
+      BACKEND_HOST: backend
+      BACKEND_PORT: '3210'
+      DNS_RESOLVER: 127.0.0.11
+    ports:
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-3210}:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+  backend:
+    build: .
+    image: ${BACKEND_IMAGE:-xingce-backend:local}
+    restart: unless-stopped
+    init: true
+    env_file:
+      - path: ${APP_ENV_FILE:-.env.stack}
+        required: true
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3210
+      SERVE_FRONTEND: 'false'
+      TRUST_PROXY: '1'
+      STORAGE_DRIVER: postgres
+      DATABASE_URL: ${DATABASE_URL:?Run npm run stack:prepare first}
+      REDIS_URL: ${REDIS_URL:?Run npm run stack:prepare first}
+      RESOURCE_DRIVER: s3
+      S3_ENDPOINT: http://seaweedfs:8333
+      QUESTION_RESOURCE_VERSION: ${QUESTION_RESOURCE_VERSION:?Set the resource manifest version}
+    depends_on:
+      database:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      seaweedfs:
+        condition: service_healthy
+    # No host port or application data volume. Supports --scale backend=2.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options: {max-size: '10m', max-file: '3'}
+
+  database:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: xingce
+      POSTGRES_DB: xingce
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run npm run stack:prepare first}
+    volumes:
+      - database-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U xingce -d xingce']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    stop_grace_period: 30s
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Run npm run stack:prepare first}
+    # $$ escapes Compose interpolation; the container shell expands its own env.
+    command: [sh, -c, 'exec redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction --requirepass "$$REDIS_PASSWORD"']
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  seaweedfs:
+    # Public upstream SeaweedFS 4.38, pinned for reproducible resource storage.
+    image: chrislusf/seaweedfs@sha256:e1ee85a3089d96c4f3df699a0944468557813f5df306819c9d368c4039070ddf
+    command: [mini, -dir=/data, -ip=seaweedfs, -ip.bind=0.0.0.0, -s3.config=/etc/seaweedfs/s3.json, -webdav=false, -admin.ui=false, -s3.port.iceberg=0]
+    restart: unless-stopped
+    environment:
+      S3_BUCKET: ${S3_BUCKET:-xingce-resources}
+    volumes:
+      - seaweed-data:/data
+      - type: bind
+        source: ${SEAWEEDFS_CONFIG_FILE:?Run npm run stack:prepare first}
+        target: /etc/seaweedfs/s3.json
+        read_only: true
+        bind: {create_host_path: false}
+    healthcheck:
+      test: [CMD-SHELL, 'wget -q -O /dev/null http://127.0.0.1:9333/cluster/status']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    stop_grace_period: 30s
+
+volumes:
+  database-data:
+  redis-data:
+  seaweed-data:

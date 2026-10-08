@@ -1,0 +1,21 @@
+# Build contexts never contain credentials, user data or question resources.
+**
+!Dockerfile
+!Dockerfile.frontend
+!package.json
+!package-lock.json
+!index.html
+!vite.config.js
+!src/
+!src/**
+!public/
+!public/**
+!server/
+!server/**
+!scripts/
+!scripts/import-legacy.mjs
+!scripts/package-resources.mjs
+!scripts/upload-resources.mjs
+!deploy/
+!deploy/nginx/
+!deploy/nginx/**

@@ -1,0 +1,14 @@
+# Template only. Replace study.example.com and set PUBLIC_URL / TRUST_PROXY in
+# .env before public deployment. This file does not start or install anything.
+study.example.com {
+    encode zstd gzip
+    header {
+        Strict-Transport-Security "max-age=31536000"
+        X-Content-Type-Options nosniff
+        Referrer-Policy same-origin
+    }
+    reverse_proxy 127.0.0.1:3210 {
+        # Send event-stream chunks immediately, including the AI explanation.
+        flush_interval -1
+    }
+}

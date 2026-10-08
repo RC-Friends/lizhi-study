@@ -1,9 +1,8 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import { loadConfig } from './server/config.mjs';
 
 export default defineConfig(() => {
-  const target = `http://127.0.0.1:${loadConfig().port}`;
+  const target = process.env.BACKEND_URL || 'http://127.0.0.1:3210';
   return {
   plugins: [react()],
   server: {
