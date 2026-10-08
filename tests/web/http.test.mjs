@@ -83,7 +83,7 @@ test('visitors may supervise results but cannot write, recover private notes, or
   assert.equal((await request(`/api/learning/questions/${question.id}`, { token, method: 'PATCH', body: { note: 'PRIVATE_NOTE', bookmarked: true } })).status, 200);
   let response = await request(route + '/coach', { token, body: { index: 0, message: '为什么错了？' } });
   const stream = await response.text(); assert.ok(stream.includes('event: complete')); assert.ok(stream.includes('PRIVATE_COACH_REPLY'));
-  for (const endpoint of ['/api/public/dashboard', '/api/public/history', `/api/public/matches/${id}`]) {
+  for (const endpoint of ['/api/public/dashboard', '/api/public/stats', '/api/public/history', `/api/public/matches/${id}`]) {
     response = await request(endpoint); assert.equal(response.status, 200);
     const body = await response.text();
     for (const secret of ['PRIVATE_NOTE', 'PRIVATE_COACH_REPLY', 'tokenHash', 'coachMessages']) assert.ok(!body.includes(secret), `${endpoint}: ${secret}`);
@@ -98,6 +98,21 @@ test('visitors may supervise results but cannot write, recover private notes, or
   assert.equal((await (await request('/api/learning/questions?kind=wrong&search=PRIVATE_NOTE&pageSize=1', { token })).json()).total, 1);
   const outside = service.create({ ...settings, mode: 'practice' }, { ownerId: 'someone-else' });
   assert.equal((await request(`/api/matches/${outside.match.id}`, { token })).status, 404);
+});
+
+test('guest stats are anonymous, read-only, validated and rate limited without model calls', async t => {
+  let calls = 0;
+  const { request } = await setup(t, { providers: { llm: () => { calls++; return result(); } } });
+  const response = await request('/api/public/stats');
+  assert.equal(response.status, 200); assert.equal(response.headers.get('cache-control'), 'no-store');
+  const data = await response.json(); assert.equal(data.summary.answered, 0); assert.equal(data.summary.accuracy, null);
+  assert.equal(data.schemaVersion, '1.0'); assert.equal(data.dataRevision, null); assert.equal(data.activity.length, 7);
+  assert.equal((await request('/api/public/stats?module=unknown')).status, 400);
+  assert.equal((await request('/api/public/stats?from=2026-02-30')).status, 400);
+  assert.equal((await request('/api/public/stats?unused=1')).status, 400);
+  assert.equal((await request('/api/public/stats', { body: {} })).status, 401);
+  for (let index = 0; index < 56; index++) assert.equal((await request('/api/public/stats')).status, 200);
+  assert.equal((await request('/api/public/stats')).status, 429); assert.equal(calls, 0);
 });
 
 test('JWT session persists through requests; invalid tokens and cross-site writes are rejected', async t => {

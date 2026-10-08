@@ -10,6 +10,7 @@ import { ProviderError } from './providers.mjs';
 import { defaultImagesPath } from './resources.mjs';
 import { imageMime } from './object-resources.mjs';
 import { questionImportRouter } from './question-import-api.mjs';
+import { publicStats, publicStatsQuery } from './public-stats.mjs';
 
 export function createApp(bank, service, config, options = {}) {
   const app = express(), auth = createAuth(config);
@@ -91,6 +92,14 @@ export function createApp(bank, service, config, options = {}) {
     res.json({ ...info, providers: providerCatalog(config), coach: { name: '小栗', ready: Boolean(config.llm.key && config.llm.model) } });
   });
   app.get('/api/public/revision', async (_req, res) => res.json({ dataRevision: runtime ? await runtime.revision() : null }));
+  app.get('/api/public/stats', async (req, res) => {
+    await limit(`public-stats:${req.ip}`, 60, 60000);
+    const query = publicStatsQuery(req.query);
+    const work = ({ learning }) => publicStats(learning, query);
+    const value = runtime ? await runtime.cached('public:stats:v1:' + JSON.stringify(query), work)
+      : { ...await run(work, { readOnly: true }), dataRevision: null };
+    res.set('X-RateLimit-Limit', '60').json(value);
+  });
   app.get('/api/public/overview', route((req, { learning }) => overview(req, learning, true), { cache: true }));
   app.get('/api/public/dashboard', route((_req, { learning }) => learning.publicDashboard(), { cache: true }));
   app.get('/api/public/history', route((req, { learning }) => learning.history({ publicOnly: true, page: req.query.page || 1, pageSize: req.query.pageSize || 20 }), { cache: true }));

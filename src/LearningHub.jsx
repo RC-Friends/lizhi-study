@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import DOMPurify from 'dompurify';
 import { ArrowRight, ArrowUpRight, BookOpen, Bookmark, CalendarDays, Check, ChevronDown, ChevronRight, CircleCheck, CircleHelp, CircleX, Clock3, Eye, Flame, GraduationCap, History, Image as ImageIcon, LayoutDashboard, LoaderCircle, LockKeyhole, LogOut, Play, Plus, RefreshCw, Search, Settings2, ShieldCheck, Sparkles, Target, Trophy, X, Zap } from 'lucide-react';
 import './learning.css';
+import ObserverSkill from './ObserverSkill.jsx';
 
 const nf = new Intl.NumberFormat('zh-CN');
 const pct = value => value == null ? '—' : `${Number(value).toFixed(Number(value) % 1 ? 1 : 0)}%`;
@@ -10,7 +11,8 @@ const duration = ms => !ms ? '0 分钟' : ms < 60000 ? `${Math.round(ms / 1000)}
 const plain = html => { const element = document.createElement('div'); element.innerHTML = DOMPurify.sanitize(html || ''); return element.textContent || ''; };
 const clean = html => DOMPurify.sanitize(html || '', { USE_PROFILES: { html: true, mathMl: true }, FORBID_TAGS: ['style', 'iframe', 'svg'], FORBID_ATTR: ['style', 'srcset'] });
 const modeName = item => item.mode === 'practice' || item.settings?.mode === 'practice' ? '自主练习' : item.mode === 'jev' || item.settings?.mode === 'jev' ? 'JEV 对战' : 'AI 对战';
-const labels = { overview: '学习概览', practice: '开始练习', wrong: '错题本', bookmarks: '收藏夹', history: '学习记录', public: '公开监督', settings: '学习设置' };
+const labels = { overview: '学习概览', practice: '开始练习', wrong: '错题本', bookmarks: '收藏夹', history: '学习记录', public: '公开监督', skill: 'AI 监督', settings: '学习设置' };
+const publicHubView = () => ['skill', 'history'].includes(window.location.hash.slice(1)) ? window.location.hash.slice(1) : null;
 
 export function Chestnut({ size = 64, cheerful = true, className = '' }) {
   return <svg className={`chestnut ${className}`} width={size} height={size} viewBox="0 0 80 80" role="img" aria-label="陪练小栗"><path d="M40 10c-4 10-27 17-27 38 0 18 11 25 27 25s27-7 27-25C67 27 45 20 40 10Z" fill="#ac704e" /><path d="M14 50c2 15 10 22 26 22s24-7 26-22c-12-8-40-8-52 0Z" fill="#f1d5a5" /><path d="M40 14c1-8 10-11 16-6-4 7-10 9-16 6Z" fill="#8caa64" /><path d="M40 15c-1-5-5-8-8-9" fill="none" stroke="#607744" strokeWidth="3" strokeLinecap="round" /><ellipse cx="29" cy="47" rx="2.6" ry="3.1" fill="#3e392b" /><ellipse cx="51" cy="47" rx="2.6" ry="3.1" fill="#3e392b" /><ellipse cx="23" cy="54" rx="5" ry="3" fill="#df9f80" opacity=".8" /><ellipse cx="57" cy="54" rx="5" ry="3" fill="#df9f80" opacity=".8" /><path d={cheerful ? 'M35 54q5 7 10 0' : 'M36 57q4-3 8 0'} fill="none" stroke="#6a4937" strokeWidth="2.2" strokeLinecap="round" /><path d="M24 29q4-6 10-8" fill="none" stroke="#c9926c" strokeWidth="4" strokeLinecap="round" /></svg>;
@@ -121,7 +123,7 @@ function ProfileSettings({ profile, onSave, busy }) {
 }
 
 export default function LearningHub({ learner, data = {}, catalog, loading = false, busy = false, error, onLogin, onLogout, onStart, onResume, onReview, onBookmark, onMaster, onSaveProfile, onRefresh, onImage, onLoadMore, onNotebookFilter, onAvailability, initialView = 'overview' }) {
-  const loggedIn = Boolean(learner), [view, setView] = useState(loggedIn ? initialView : 'public'), [setupInitial, setSetupInitial] = useState({}), [setupKey, setSetupKey] = useState(0), [cheer, setCheer] = useState(0), [showAllActive, setShowAllActive] = useState(false);
+  const loggedIn = Boolean(learner), [view, setView] = useState(() => publicHubView() || (loggedIn ? initialView : 'public')), [setupInitial, setSetupInitial] = useState({}), [setupKey, setSetupKey] = useState(0), [cheer, setCheer] = useState(0), [showAllActive, setShowAllActive] = useState(false);
   const profile = data.profile || learner?.profile || learner || {}, stats = data.summary || data.stats || {};
   const nickname = profile.nickname || '备考同学', history = data.history || data.recent || data.matches || [], active = data.active || history.filter(match => match.status === 'active');
   const today = stats.todayAnswered ?? stats.today?.completed ?? stats.today?.count ?? stats.todayCount ?? stats.todayCompleted ?? 0, total = stats.answered ?? stats.completed ?? stats.totalAnswered ?? stats.total ?? 0;
@@ -129,10 +131,13 @@ export default function LearningHub({ learner, data = {}, catalog, loading = fal
   const wrong = data.wrong || data.wrongQuestions || [], bookmarks = data.bookmarks || data.bookmarked || [];
   const [now] = useState(() => Date.now()), examDays = stats.daysToExam ?? (profile.examDate ? Math.ceil((new Date(`${profile.examDate}T00:00:00+08:00`).getTime() - now) / 86400000) : null);
   const publicView = !loggedIn || view === 'public';
-  const navigate = next => { setView(next); window.scrollTo({ top: 0, behavior: 'instant' }); };
+  const navigate = next => { setView(next); window.history.replaceState(null, '', window.location.pathname + window.location.search + (['skill', 'history'].includes(next) ? `#${next}` : '')); window.scrollTo({ top: 0, behavior: 'instant' }); };
   const practice = initial => { setSetupInitial(initial || {}); setSetupKey(key => key + 1); navigate('practice'); };
-  useEffect(() => { if (!loggedIn) setView('public'); else setView(initialView); }, [loggedIn, initialView]);
-  const menu = loggedIn ? [['overview', LayoutDashboard], ['practice', Play], ['wrong', BookOpen], ['bookmarks', Bookmark], ['history', History], ['public', Eye]] : [['public', Eye], ['history', History]];
+  useEffect(() => {
+    const sync = () => setView(publicHubView() || (loggedIn ? initialView : 'public'));
+    sync(); window.addEventListener('popstate', sync); return () => window.removeEventListener('popstate', sync);
+  }, [loggedIn, initialView]);
+  const menu = loggedIn ? [['overview', LayoutDashboard], ['practice', Play], ['wrong', BookOpen], ['bookmarks', Bookmark], ['history', History], ['public', Eye], ['skill', Sparkles]] : [['public', Eye], ['history', History], ['skill', Sparkles]];
   const cheers = [today >= goal ? '今天的目标完成啦！给自己一个小小的鼓掌，想再练几题，我还在。' : `不用一下子变得很厉害。我们先把今天的 ${goal} 道题，认真做完。`, '遇到不会的题也没关系。收藏起来，写下一点发现，下次你会更有把握。', '我是小栗，你的陪练搭子。答题时我也会认真想，交卷以后再和你聊解法。'];
   return <div className="learning-app"><header className="lh-header"><div><button className="lh-brand" onClick={() => navigate(loggedIn ? 'overview' : 'public')}><span><GraduationCap size={23} /></span><div>栗知自习室<small>ONE QUESTION, ONE STEP.</small></div></button><div className="lh-header-actions"><span className="lh-public-label"><Eye size={14} />{loggedIn ? '学习记录对朋友公开' : '游客监督 · 无需登录'}</span>{loggedIn ? <><button className="lh-user" onClick={() => navigate('settings')} aria-label="打开学习设置"><span>{nickname.slice(0, 1)}</span><strong>{nickname}</strong><Settings2 size={15} /></button><button className="icon-button" title="退出登录" aria-label="退出登录" onClick={onLogout}><LogOut size={17} /></button></> : <button className="button primary small" onClick={onLogin}><LockKeyhole size={14} />考生登录</button>}</div></div></header>
     <div className="lh-shell"><aside className="lh-sidebar"><span className="lh-nav-label">{loggedIn ? '我的自习室' : '一起见证进步'}</span><nav aria-label="学习中心导航">{menu.map(([key, Icon]) => <button key={key} className={view === key ? 'active' : ''} aria-current={view === key ? 'page' : undefined} onClick={() => key === 'practice' ? practice() : navigate(key)}><Icon size={18} /><span>{labels[key]}</span>{key === 'wrong' && (data.counts?.wrong ?? wrong.filter(item => !item.mastered).length) > 0 && <small>{data.counts?.wrong ?? wrong.filter(item => !item.mastered).length}</small>}{key === 'bookmarks' && (data.counts?.bookmarked ?? bookmarks.length) > 0 && <small>{data.counts?.bookmarked ?? bookmarks.length}</small>}</button>)}</nav><div className="lh-sidebar-bottom"><Chestnut size={48} /><p>把题一道道做完，<br />把日子一点点过好。</p><span>小栗一直在这里</span></div>{loggedIn && <button className={`lh-settings-link ${view === 'settings' ? 'active' : ''}`} onClick={() => navigate('settings')}><Settings2 size={16} />学习设置</button>}</aside>
@@ -148,6 +153,7 @@ export default function LearningHub({ learner, data = {}, catalog, loading = fal
         {(view === 'wrong' || view === 'bookmarks') && loggedIn && <Notebook key={view} type={view} items={view === 'wrong' ? wrong : bookmarks} catalog={catalog} onStart={onStart} onBookmark={onBookmark} onMaster={onMaster} busy={busy} page={data.pages?.[view]} onLoadMore={() => onLoadMore?.(view)} onFilter={onNotebookFilter ? filters => onNotebookFilter(view, filters) : undefined} onImage={onImage} />}
         {view === 'history' && <><div className="lh-page-heading"><div><span className="lh-kicker">EVERY EFFORT COUNTS</span><h1>{loggedIn ? '你的努力，有迹可循。' : `${nickname}的学习记录`}</h1><p>{loggedIn ? '从一次练习到下一次，回看答案、复盘错题，也看见自己的进步。' : '看看每次练习的真实成绩。游客可以查看已提交的题目与作答结果。'}</p></div>{onRefresh && <button className="button ghost small" onClick={onRefresh} disabled={loading}><RefreshCw size={15} />刷新记录</button>}</div><section className="lh-panel"><MatchList matches={history} onReview={onReview} onResume={onResume} publicView={!loggedIn} busy={busy} page={data.pages?.history} onLoadMore={() => onLoadMore?.('history')} /></section></>}
         {view === 'settings' && loggedIn && <ProfileSettings profile={profile} onSave={onSaveProfile} busy={busy} />}
+        {view === 'skill' && <ObserverSkill />}
         <footer className="lh-footer"><span>栗知自习室 <span>·</span> 每一道题，都算数。</span><span>题库参考答案判分 · 演示不计入学习统计</span></footer>
       </main>
     </div>

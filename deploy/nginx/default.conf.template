@@ -48,6 +48,13 @@ server {
         proxy_pass http://api_backend;
         proxy_set_header Host $http_host;
     }
+    location /skills/ {
+        try_files $uri =404;
+        types { text/plain md yaml; }
+        default_type text/plain;
+        charset utf-8;
+        expires -1;
+    }
     location /assets/ { try_files $uri =404; expires 1y; }
     location / { try_files $uri $uri/ /index.html; expires -1; }
     location ~ /\. { deny all; }

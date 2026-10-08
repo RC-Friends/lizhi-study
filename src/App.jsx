@@ -333,7 +333,7 @@ export default function App() {
       const route = window.location.hash.match(/^#(record|match)\/([a-f0-9-]+)$/);
       if (route?.[1] === 'record') await openRecord(route[2], account, false);
       else if (route?.[1] === 'match') await resume(route[2], account, false);
-      else if (account && savedMatch()?.id) await resume(savedMatch().id, account, false);
+      else if (!window.location.hash && account && savedMatch()?.id) await resume(savedMatch().id, account, false);
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
   }

@@ -93,6 +93,7 @@ test('two stateless backends share durable state, jobs and streams', async t => 
   });
   await t.test('versioned caches update scores immediately and late old readers cannot poison the new version',async()=>{
     const initial=await get(b,'/api/learning/overview');assert.equal(initial.data.summary.accuracy,100);
+    const statsBefore=await request(b,'/api/public/stats');assert.equal(statsBefore.data.summary.accuracy,100);
     const active=opened.filter(r=>!r.closed), other=active.find(r=>r!==b.runtime);
     let release, entered;const started=new Promise(resolve=>entered=resolve);
     const oldRead=other.cached('cache-race',async({learning})=>{const value=learning.dashboard('primary');entered();await new Promise(resolve=>release=resolve);return value;});
@@ -107,6 +108,12 @@ test('two stateless backends share durable state, jobs and streams', async t => 
     assert.notEqual(overview.data.dataRevision,initial.data.dataRevision);
     const publicView=await request(b,'/api/public/overview');assert.equal(publicView.data.summary.accuracy,50);assert.equal(publicView.data.wrong,undefined);
     assert.ok(!JSON.stringify(publicView.data).includes('PRIVATE_NOTE'));
+    const statsAfter=await request(b,'/api/public/stats?module=all');
+    assert.equal(statsAfter.data.summary.answered,2);assert.equal(statsAfter.data.summary.accuracy,50);
+    assert.notEqual(statsAfter.data.dataRevision,statsBefore.data.dataRevision);
+    const replica=opened.find(r=>!r.closed&&r!==b.runtime),key='public:stats:v1:'+JSON.stringify({from:statsAfter.data.range.from,to:statsAfter.data.range.to,module:'all'});
+    const shared=await replica.cached(key,()=>{throw new Error('Expected canonical guest stats to share Redis cache');});
+    assert.deepEqual(shared,statsAfter.data);assert.ok(!JSON.stringify(shared).includes('PRIVATE_NOTE'));
     await post(b,`/api/matches/${mid}/finish`,{});
   });
   await t.test('Redis loss does not serve stale cached scores and admission fails closed',async()=>{

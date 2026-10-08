@@ -59,6 +59,7 @@ docker compose --env-file .env.stack up -d --wait --scale backend=2
 - [Kubernetes 数据服务范例](deploy/kubernetes/data.json)、[应用范例](deploy/kubernetes/app.json)
 - [题库 JSON Schema](schema/question.schema.json)、[来源与许可说明](docs/DATA_SOURCES.md)
 - [标准题库导入、图片范例与在线发布 API](docs/QUESTION_IMPORT.md)
+- [游客 AI 监督技能、网页下载与公开统计](docs/OBSERVER_SKILL.md)
 - [自动化验收与版本发布](docs/RELEASING.md)、[更新日志](CHANGELOG.md)
 
 在 `.env.stack` 中配置 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`。确认模型支持图像输入后再设置 `LLM_VISION=true`。不配置模型也能使用自主练习和明确标记的演示对战。模型密钥仅由后端读取。

@@ -1,0 +1,4 @@
+interface:
+  display_name: "栗知学习观察员"
+  short_description: "以游客身份查看公开学习进度、区间正确率和人机成绩，提供有依据的监督反馈"
+  default_prompt: "使用 $lizhi-study-observer 查看最近七天的公开做题情况，说明进步和需要关注的模块。"

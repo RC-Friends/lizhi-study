@@ -6,6 +6,7 @@ import { chromium } from 'playwright-core';
 import { QuestionBank } from '../../server/bank.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { execFileSync } from 'node:child_process';
+import { checkObserverSkill } from './observer-e2e.mjs';
 
 const base=process.env.E2E_BASE_URL, password=process.env.E2E_PASSWORD;
 if(!base || !['127.0.0.1','localhost'].includes(new URL(base).hostname) || !password) throw new Error('Use E2E_BASE_URL pointing to an isolated loopback stack and its E2E_PASSWORD.');
@@ -58,7 +59,7 @@ try{
  checks.push('real Nginx SSE across replicas, concurrent multimodal demo, sealed AI through refresh, independent timing, distributed coach, explicit next');
  await page.getByRole('button',{name:'退出登录',exact:true}).click();await visible(page,'.lh-welcome.public');await page.goto(`${base}/#record/${mid}`);await visible(page,'.reading-note');await page.locator('.review-item summary').first().click();assert.equal(await page.locator('.review-private-tools,.question-notebook,.coach-panel').count(),0);assert.ok(!(await page.locator('body').textContent()).includes('PRIVATE_STACK_NOTE'));await screenshot(page,'desktop-public-record');
  const mobileContext=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true});const mobile=await mobileContext.newPage();page=mobile;watch(mobile);await mobile.goto(base);await visible(mobile,'.lh-welcome.public');await screenshot(mobile,'mobile-guest');await login(mobile);
- for(const name of ['开始练习',/错题本/,/收藏夹/,'学习记录','公开监督','学习概览']){await nav(mobile,name).click();await screenshot(mobile,'mobile-'+String(name).replace(/[^a-zA-Z\u4e00-\u9fff]/g,''));}
+ for(const name of ['开始练习',/错题本/,/收藏夹/,'学习记录','公开监督','AI 监督','学习概览']){await nav(mobile,name).click();await screenshot(mobile,'mobile-'+String(name).replace(/[^a-zA-Z\u4e00-\u9fff]/g,''));}
  await setup(mobile,{mode:'jev',images:'visual',count:2});await images(mobile);await answer(mobile,'A','锁定答案，轮到 AI');await visible(mobile,'.probabilities');await screenshot(mobile,'mobile-jev');await mobile.getByRole('button',{name:'确认，下一题',exact:true}).click();await visible(mobile,'.human-submit');await mobile.getByRole('button',{name:'结束本场'}).click();await mobile.getByRole('button',{name:'结束并查看报告'}).click();await visible(mobile,'.report-page');assert.equal((await state(mobile)).scores.completed,1);await home(mobile);
  await setup(mobile,{mode:'llm',images:'visual',count:1});await images(mobile);await mobile.getByRole('heading',{name:'AI 已交卷，等你。'}).waitFor();await answer(mobile,'C','提交答案，查看 AI');await visible(mobile,'.timing-comparison');await screenshot(mobile,'mobile-timing');await mobile.getByRole('button',{name:'完成对战，查看战报'}).click();await visible(mobile,'.report-page');
  checks.push('guest privacy, 390px navigation without overflow, image questions, JEV probabilities and early finish, mobile LLM timing/report');
@@ -74,5 +75,6 @@ try{
   assert.equal(await mobile.locator('.module-chips button').filter({hasText:'数量关系'}).locator('span').textContent(),String(beforeImport.bank.modules.find(m=>m.name==='数量关系').count+1));
   await screenshot(mobile,'mobile-live-import');checks.push('operator CLI uploads through Nginx; active study UI refreshes catalog and availability without reload or backend restart');
  }
+ await checkObserverSkill({browser,base,screenshot});checks.push('guest skill navigation, public HTTPS origin binding, real clipboard and Markdown/ZIP downloads, anonymous statistics, retry and 390px layout');
  assert.deepEqual(errors,[]);assert.deepEqual(failed,[]);await fs.writeFile('test-results/stack-results.json',JSON.stringify({passed:true,checks,pageErrors:errors,failedRequests:failed,paidModelCalls:0},null,2));console.log(JSON.stringify({passed:true,checks,pageErrors:errors,failedRequests:failed}));
 }catch(error){await page?.screenshot({path:'test-results/stack-failure.png',fullPage:true}).catch(()=>{});await fs.writeFile('test-results/stack-failure.json',JSON.stringify({error:error.message,errors,failed},null,2));throw error;}finally{await browser.close();}
