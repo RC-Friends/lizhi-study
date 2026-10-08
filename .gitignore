@@ -1,0 +1,34 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+data/runtime/
+test-results/
+__pycache__/
+*.pyc
+*.part
+artifacts/
+backups/
+coverage/
+*.dump
+*.tar
+*.tar.gz
+*.zip
+*.log
+.DS_Store
+.agents/
+.codex/
+.aws/
+# Downloaded/generated question resources are published separately to object storage.
+# Keep source definitions, collection scripts and upstream attribution in Git.
+assets/images/
+data/xingce/
+data/raw/*
+!data/raw/gongkao-LICENSE
+!data/raw/fei-LICENSE.txt
+!data/raw/gongkao-README.md
+!data/raw/fei-README.md
+# Existing private-cluster rollout files are local operator notes, not portable deployment inputs.
+deploy/k8s/
+deploy/local/
