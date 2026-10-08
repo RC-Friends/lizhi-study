@@ -35,6 +35,8 @@ SeaweedFS 启动时把只读挂载的 0600 配置复制到容器内存文件系�
 
 ## Kubernetes
 
+前端使用当前 Pod 命名空间生成后端完整域名 `backend.<namespace>.svc.cluster.local`。Nginx 动态解析不补全 DNS 搜索域，因此不能只填 `backend`。如果集群使用自定义 DNS 域，请调整 frontend 的 `BACKEND_HOST` 后缀。
+
 范例位于 `deploy/kubernetes/`，使用 Kubernetes 原生 JSON 清单（`kubectl` 同时支持 JSON 与 YAML）。数据服务各一个副本、独立 PVC；后端默认两个副本；frontend Service 类型为 LoadBalancer。未指定存储类、外部 IP、域名、节点或镜像拉取凭证。集群需要默认 StorageClass；LoadBalancer 需要由目标环境提供实现，否则可以临时 port-forward 访问。
 
 先构建并将两个镜像发布到自己选择的仓库；下面的域名只作占位。推送与部署应在准备正式环境时自行执行：
