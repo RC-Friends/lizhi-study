@@ -1,0 +1,14 @@
+# Shell scripts and nginx templates must keep LF: with core.autocrlf=true on
+# Windows a CRLF checkout breaks the frontend image build (busybox sh fails on
+# \r in the nginx entrypoint script). Everything else stays on default handling.
+*.sh text eol=lf
+*.envsh text eol=lf
+deploy/nginx/* text eol=lf
+
+# Explicit binaries (auto-detection fallback).
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
