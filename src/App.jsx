@@ -247,9 +247,9 @@ export default function App() {
   const [loginOpen, setLoginOpen] = useState(false), [expired, setExpired] = useState(false), [rulesOpen, setRulesOpen] = useState(false), [finishOpen, setFinishOpen] = useState(false), [image, setImage] = useState(null);
   const [connection, setConnection] = useState('connected');
   const hubRequest = useRef(0), filters = useRef({ wrong: {}, bookmarks: {} }), collectionRequests = useRef({}), pendingMatch = useRef(null);
-  const pages = useRef({ history: 1, wrong: 1, bookmarks: 1 });
+  const pages = useRef({ history: 1, wrong: 1, bookmarks: 1 }), hubRevision = useRef(null);
   const liveMatch = useRef(match); liveMatch.current = match;
-  const applySnapshot = snapshot => setMatch(current => !current || current.id !== snapshot.id || snapshot.revision >= current.revision ? snapshot : current);
+  const applySnapshot = snapshot => setMatch(current => current?.id === snapshot.id && snapshot.revision >= current.revision ? snapshot : current);
   function pageMeta(response) { return { total: response.total, hasMore: response.page < response.pages, loading: false }; }
   function listUrl(kind, account, page = 1) {
     const query = new URLSearchParams({ page, pageSize: 20 });
@@ -260,13 +260,21 @@ export default function App() {
   }
   async function refreshHub(account = learner, quiet = false) {
     const request = ++hubRequest.current;
+    const filterKey = JSON.stringify(filters.current);
+    for (const kind of ['history', 'wrong', 'bookmarks']) collectionRequests.current[kind] = (collectionRequests.current[kind] || 0) + 1;
     if (!quiet) setHubLoading(true);
     try {
-      const [dashboard, history, wrong, bookmarks] = await Promise.all([
-        api(`/api/${account ? 'learning' : 'public'}/dashboard`), api(listUrl('history', account)),
-        account ? api(listUrl('wrong', account)) : null, account ? api(listUrl('bookmarks', account)) : null,
-      ]);
-      if (request !== hubRequest.current) return;
+      const query = new URLSearchParams();
+      for (const kind of ['wrong', 'bookmarks']) {
+        const selected = filters.current[kind] || {};
+        if (selected.module) query.set(`${kind}Module`, selected.module);
+        if (selected.search) query.set(`${kind}Search`, selected.search);
+        if (selected.includeMastered) query.set(`${kind}Mastered`, String(selected.includeMastered));
+      }
+      // All panels share one database snapshot and one committed revision.
+      const { history, wrong, bookmarks, ...dashboard } = await api(`/api/${account ? 'learning' : 'public'}/overview?${query}`);
+      if (request !== hubRequest.current || filterKey !== JSON.stringify(filters.current)) return;
+      hubRevision.current = dashboard.dataRevision || null;
       pages.current = { history: 1, wrong: 1, bookmarks: 1 };
       setHub({ ...dashboard, history: history.items, wrong: wrong?.items || [], bookmarks: bookmarks?.items || [], pages: {
         history: pageMeta(history), ...(wrong ? { wrong: pageMeta(wrong), bookmarks: pageMeta(bookmarks) } : {}),
@@ -276,15 +284,16 @@ export default function App() {
   }
   async function loadCollection(kind, append = false, nextFilters) {
     if (nextFilters) filters.current[kind] = nextFilters;
+    const epoch = hubRequest.current;
     const request = (collectionRequests.current[kind] || 0) + 1; collectionRequests.current[kind] = request;
     const page = append ? pages.current[kind] + 1 : 1;
     setHub(current => current ? { ...current, pages: { ...current.pages, [kind]: { ...current.pages?.[kind], loading: true } } } : current);
     try {
       const response = await api(listUrl(kind, learner, page));
-      if (collectionRequests.current[kind] !== request) return;
+      if (collectionRequests.current[kind] !== request || epoch !== hubRequest.current) return;
       pages.current[kind] = page;
       setHub(current => ({ ...current, [kind]: append ? [...current[kind], ...response.items] : response.items, pages: { ...current.pages, [kind]: pageMeta(response) } }));
-    } catch (e) { setError(e.message); setHub(current => current ? { ...current, pages: { ...current.pages, [kind]: { ...current.pages?.[kind], loading: false } } } : current); }
+    } catch (e) { if (collectionRequests.current[kind] !== request || epoch !== hubRequest.current) return; setError(e.message); setHub(current => current ? { ...current, pages: { ...current.pages, [kind]: { ...current.pages?.[kind], loading: false } } } : current); }
   }
   async function openRecord(id, account = learner, push = true) {
     setBusy(true); setError('');
@@ -352,9 +361,19 @@ export default function App() {
   }, [learner]);
   useEffect(() => {
     if (match || loading) return;
-    const refresh = () => { if (!document.hidden) refreshHub(learner, true); };
-    const timer = setInterval(refresh, 60000); window.addEventListener('focus', refresh);
-    return () => { clearInterval(timer); window.removeEventListener('focus', refresh); };
+    let stopped = false, polling = false;
+    const refresh = async (force = false) => {
+      if (document.hidden || polling || stopped) return;
+      polling = true;
+      try {
+        const { dataRevision } = await api('/api/public/revision');
+        if (!stopped && (force || !dataRevision || dataRevision !== hubRevision.current)) await refreshHub(learner, true);
+      } catch { /* Keep the last confirmed data; explicit refresh reports errors. */ }
+      finally { polling = false; }
+    };
+    const focus = () => refresh(true);
+    const timer = setInterval(refresh, 3000); window.addEventListener('focus', focus); document.addEventListener('visibilitychange', focus);
+    return () => { stopped = true; clearInterval(timer); window.removeEventListener('focus', focus); document.removeEventListener('visibilitychange', focus); };
   }, [Boolean(match), loading, learner]);
   useEffect(() => {
     if (!credentials || !learner || match?.status !== 'active') return;

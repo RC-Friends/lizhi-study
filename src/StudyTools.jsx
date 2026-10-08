@@ -49,6 +49,20 @@ export function CoachPanel({ matchId, index, revealed, correct, demo, compact = 
     api(`/api/matches/${matchId}/coach?index=${index}`, { signal: controller.signal }).then(setChat).catch(e => { if (!controller.signal.aborted) setError(e.message); });
     return () => { controller.abort(); request.current?.abort(); };
   }, [matchId, index, revealed]);
+  useEffect(() => {
+    if (!revealed || !chat?.busy || busy) return;
+    const controller = new AbortController(); let polling = false;
+    const timer = setInterval(async () => {
+      if (polling || document.hidden) return; polling = true;
+      try {
+        const saved = await api(`/api/matches/${matchId}/coach?index=${index}`, { signal: controller.signal });
+        setChat(saved);
+        if (!saved.busy) { setDraft(''); setAsking(''); }
+      } catch (e) { if (!controller.signal.aborted) setError(e.message); }
+      finally { polling = false; }
+    }, 2000);
+    return () => { clearInterval(timer); controller.abort(); };
+  }, [matchId, index, revealed, chat?.busy, busy]);
   useEffect(() => { if (body.current) body.current.scrollTop = body.current.scrollHeight; }, [draft, chat]);
   async function send(message) {
     if (busy || !message.trim() || !chat?.ready || chat.remaining <= 0) return;
@@ -73,7 +87,7 @@ export function CoachPanel({ matchId, index, revealed, correct, demo, compact = 
       <div className="coach-prompts">{['用简单的话讲讲这题', '其他选项为什么不对？', '帮我总结一个避坑口诀'].map(text => <button disabled={busy || !chat?.ready || chat?.remaining <= 0 || chat?.busy} key={text} onClick={() => send(text)}>{text}</button>)}</div>
       <form className="coach-input" onSubmit={e => { e.preventDefault(); send(input); }}><label className="sr-only" htmlFor={`coach-${matchId}-${index}`}>问小栗</label><textarea id={`coach-${matchId}-${index}`} maxLength={800} rows={2} value={input} disabled={busy || !chat?.ready || chat?.remaining <= 0 || chat?.busy} onChange={e => setInput(e.target.value)} placeholder={chat?.ready === false ? '模型尚未接入，先看看参考解析吧' : '我不明白……（最多 800 字）'} /><button type="submit" className="button primary" disabled={busy || !input.trim() || !chat?.ready || chat?.remaining <= 0 || chat?.busy} aria-label="发送给小栗">{busy ? <LoaderCircle className="spin" size={17} /> : <Send size={17} />}</button></form>
       <div className="coach-foot"><ShieldCheck size={12} />聊天仅自己可见 · 不影响已判成绩{chat && <span>还可聊 {chat.remaining} 轮</span>}</div>
-      {chat?.busy && !busy && <p className="coach-recovery">刚才的回复仍在生成。稍后重新打开本题即可查看已保存的回复。</p>}
+      {chat?.busy && !busy && <p className="coach-recovery">刚才的回复仍在生成，完成后会自动显示在这里。</p>}
       {error && <p className="error-text" role="alert">{error}</p>}
     </>}
   </aside>;
