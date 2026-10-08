@@ -1,0 +1,268 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "行测题库记录 v1",
+  "description": "图片路径均相对于项目根目录；答案与解析沿用来源。",
+  "type": "object",
+  "required": [
+    "id",
+    "schema_version",
+    "module",
+    "submodule",
+    "source_type",
+    "question_type",
+    "answer",
+    "images",
+    "has_image",
+    "material_id",
+    "classification_basis",
+    "year",
+    "province",
+    "years",
+    "provinces",
+    "difficulty",
+    "accuracy",
+    "source_reviewed",
+    "answer_verification",
+    "charts",
+    "occurrences",
+    "stem",
+    "stem_html",
+    "material",
+    "material_html",
+    "analysis",
+    "analysis_html",
+    "tags",
+    "quality_flags",
+    "knowledge_points",
+    "options",
+    "options_html"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^xc_[0-9a-f]{24}$"
+    },
+    "schema_version": {
+      "const": "1.0"
+    },
+    "module": {
+      "enum": [
+        "政治理论",
+        "常识判断",
+        "言语理解",
+        "数量关系",
+        "判断推理",
+        "资料分析"
+      ]
+    },
+    "submodule": {
+      "type": "string"
+    },
+    "source_type": {
+      "enum": [
+        "真题",
+        "模拟题"
+      ]
+    },
+    "question_type": {
+      "enum": [
+        "single",
+        "multiple",
+        "judge"
+      ]
+    },
+    "answer": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-F]$"
+      }
+    },
+    "images": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "role",
+          "kind",
+          "width",
+          "height"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^assets/images/[0-9a-f]{2}/[0-9a-f]{64}\\.(png|jpg|gif|webp|bmp)$"
+          },
+          "role": {
+            "enum": [
+              "stem",
+              "material",
+              "analysis",
+              "option_A",
+              "option_B",
+              "option_C",
+              "option_D",
+              "option_E",
+              "option_F"
+            ]
+          },
+          "kind": {
+            "enum": [
+              "image",
+              "formula"
+            ]
+          },
+          "width": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "height": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "has_image": {
+      "type": "boolean"
+    },
+    "material_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "classification_basis": {
+      "enum": [
+        "source_tag",
+        "paper_section",
+        "source_category"
+      ]
+    },
+    "year": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "province": {
+      "type": "string"
+    },
+    "years": {
+      "type": "array",
+      "items": {
+        "type": "integer"
+      }
+    },
+    "provinces": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "difficulty": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "accuracy": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "source_reviewed": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "answer_verification": {
+      "const": "source_only"
+    },
+    "charts": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "occurrences": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "dataset",
+          "source_id",
+          "source_url",
+          "raw_path",
+          "paper_title",
+          "province",
+          "year"
+        ]
+      }
+    },
+    "stem": {
+      "type": "string"
+    },
+    "stem_html": {
+      "type": "string"
+    },
+    "material": {
+      "type": "string"
+    },
+    "material_html": {
+      "type": "string"
+    },
+    "analysis": {
+      "type": "string"
+    },
+    "analysis_html": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "quality_flags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "knowledge_points": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "options": {
+      "type": "object",
+      "minProperties": 2,
+      "patternProperties": {
+        "^[A-F]$": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "options_html": {
+      "type": "object",
+      "minProperties": 2,
+      "patternProperties": {
+        "^[A-F]$": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

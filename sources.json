@@ -1,0 +1,16 @@
+{
+  "gongkao": {
+    "repository": "https://github.com/mpbfx/gongkao",
+    "revision": "71e9dd7e7bd2689014c7a8af18fdb62556a860c3",
+    "description": "公开仓库中的历年行测试卷快照，保留题目、材料、选项、解析和原始标签。真题属性沿用上游标注，非官方认证。",
+    "repository_license": "AGPL-3.0",
+    "content_rights": "仓库代码许可不等于第三方题面、解析及图片的再分发许可；保留原始权利归属，仅作个人学习资料整理。"
+  },
+  "fei": {
+    "repository": "https://github.com/fei98/civil-service-exam-prep",
+    "revision": "3aa81a5c9e2f73615c9eed19870f0475442a0dfc",
+    "description": "仅导入上游标注为自建的模拟练习题，不导入 AI 生成题和重复的真题精选。",
+    "repository_license": "MIT",
+    "content_rights": "保留仓库许可证和来源；模拟题答案及解析沿用上游，未经逐题人工复核。"
+  }
+}
