@@ -63,8 +63,15 @@ try {
   test('stack', { E2E_BASE_URL: `http://${port('frontend', 8080)}`, E2E_PASSWORD: env.SITE_PASSWORD, E2E_BANK_PATH: dataPath });
   passed = true;
 } finally {
-  // Logs are never uploaded: they can contain generated test configuration.
-  if (!passed) compose(['logs', '--tail', '60', 'backend', 'frontend'], { allowFailure: true });
+  // Print failure diagnostics with generated credentials redacted. Never attach
+  // raw logs/configuration as workflow artifacts.
+  if (!passed) {
+    let logs = compose(['logs', '--tail', '60'], { capture: true, allowFailure: true }) || '';
+    const publisher = JSON.parse(fs.readFileSync(path.join(secrets, 'seaweedfs-publisher.json'), 'utf8'));
+    const privateValues = [...Object.entries(env).filter(([key]) => /PASSWORD|SECRET|KEY|DATABASE_URL|REDIS_URL/.test(key)).map(([, value]) => value), ...Object.values(publisher)];
+    for (const value of privateValues.filter(v => v?.length >= 8)) logs = logs.replaceAll(value, '[redacted]');
+    process.stderr.write(logs + '\n');
+  }
   compose(['down', '--volumes', '--remove-orphans', '--rmi', 'local'], { allowFailure: true });
   fs.rmSync(root, { recursive: true, force: true });
 }
