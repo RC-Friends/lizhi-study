@@ -27,6 +27,8 @@ docker compose --env-file .env.stack ps
 
 只有 frontend 发布端口，默认 `127.0.0.1:3210`。backend 不发布端口、无本地数据卷，可以扩容。数据库、Redis 与 SeaweedFS 只在 Compose 网络内开放。Redis 使用密码和 AOF；SeaweedFS 禁止匿名读取，应用身份只有 bucket 读取权限。
 
+SeaweedFS 启动时把只读挂载的 0600 配置复制到容器内存文件系统，设置为服务用户专属读取，再通过官方入口降权运行。因此主机用户 UID 不必与容器相同，也不需要放宽主机密钥文件权限；这份临时配置不会写入数据卷。
+
 对外访问时可以在主机使用 [Caddy 范例](../deploy/Caddyfile) 配置域名与 HTTPS，代理到 frontend。`PUBLIC_URL` 应设置为最终 HTTPS 站点地址。Nginx 会保留 Host、关闭 SSE 缓冲，并重新解析后端服务 DNS；连接重建可落到任意副本。仅在明确的代理边界内设置 `TRUST_PROXY`，不要对直接暴露的后端设置无限信任。
 
 `docker compose down` 不删除命名数据卷；不要把 `down -v` 当成普通重启。修改 `.env.stack` 的数据库密码不会自动修改已有 PostgreSQL 卷中的账户密码，需要另行完成数据库账户变更。保存好配置与三个数据卷的备份。

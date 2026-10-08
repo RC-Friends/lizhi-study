@@ -92,7 +92,18 @@ services:
   seaweedfs:
     # Public upstream SeaweedFS 4.38, pinned for reproducible resource storage.
     image: chrislusf/seaweedfs@sha256:e1ee85a3089d96c4f3df699a0944468557813f5df306819c9d368c4039070ddf
-    command: [mini, -dir=/data, -ip=seaweedfs, -ip.bind=0.0.0.0, -s3.config=/etc/seaweedfs/s3.json, -webdav=false, -admin.ui=false, -s3.port.iceberg=0]
+    # Host config stays 0600 regardless of its owner's UID. Bootstrap a private
+    # in-memory copy for the upstream entrypoint, which drops to the seaweed user.
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        cp /run/secrets/seaweedfs-s3.json /run/seaweedfs/s3.json
+        chown seaweed:seaweed /run/seaweedfs/s3.json
+        chmod 0400 /run/seaweedfs/s3.json
+        exec /entrypoint.sh "$$@"
+      - --
+    command: [mini, -dir=/data, -ip=seaweedfs, -ip.bind=0.0.0.0, -s3.config=/run/seaweedfs/s3.json, -webdav=false, -admin.ui=false, -s3.port.iceberg=0]
     restart: unless-stopped
     environment:
       S3_BUCKET: ${S3_BUCKET:-xingce-resources}
@@ -100,9 +111,11 @@ services:
       - seaweed-data:/data
       - type: bind
         source: ${SEAWEEDFS_CONFIG_FILE:?Run npm run stack:prepare first}
-        target: /etc/seaweedfs/s3.json
+        target: /run/secrets/seaweedfs-s3.json
         read_only: true
         bind: {create_host_path: false}
+    tmpfs:
+      - /run/seaweedfs:size=1m,mode=0755
     healthcheck:
       test: [CMD-SHELL, 'wget -q -O /dev/null http://127.0.0.1:9333/cluster/status']
       interval: 5s
