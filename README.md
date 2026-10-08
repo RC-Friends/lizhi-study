@@ -1,4 +1,8 @@
-# 行测自习室
+# 栗知自习室 · Lizhi Study
+
+[![CI](https://github.com/RC-CHN/lizhi-study/actions/workflows/ci.yml/badge.svg)](https://github.com/RC-CHN/lizhi-study/actions/workflows/ci.yml)
+
+「栗」是陪练小栗，「知」是每天积累的一点知识。一个可以独自练习、邀请朋友监督，也可以与 AI 同场答题的行测自习室。
 
 给备考朋友使用的刷题站：自主组卷、错题本、收藏和笔记、学习统计，以及与小栗或 JEV 对战。游客可以查看已完成的答题记录；考生使用口令登录，JWT 保存在浏览器本地。
 
@@ -53,7 +57,8 @@ docker compose --env-file .env.stack up -d --wait --scale backend=2
 - [状态、任务及接口设计](docs/PROTOTYPE.md)
 - [配置字段](.env.example)
 - [Kubernetes 数据服务范例](deploy/kubernetes/data.json)、[应用范例](deploy/kubernetes/app.json)
-- [数据结构](SCHEMA.md)、[来源与许可](LICENSES.md)
+- [题库 JSON Schema](schema/question.schema.json)、[来源与许可说明](docs/DATA_SOURCES.md)
+- [自动化验收与版本发布](docs/RELEASING.md)、[更新日志](CHANGELOG.md)
 
 在 `.env.stack` 中配置 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`。确认模型支持图像输入后再设置 `LLM_VISION=true`。不配置模型也能使用自主练习和明确标记的演示对战。模型密钥仅由后端读取。
 
@@ -63,6 +68,8 @@ docker compose --env-file .env.stack up -d --wait --scale backend=2
 npm test
 npm run build
 ```
+
+完整隔离验收可运行 `npx --no-install playwright-core install --with-deps chromium`，然后 `npm run test:ci-stack`。它自动创建独立的 Docker Compose 项目、随机凭证、合成图题和两个后端实例，执行数据库、Redis、SeaweedFS 与真实浏览器测试，结束后删除该测试项目和测试卷。不需要下载真实题库，也不需要模型密钥。需要 Docker Compose 2.24.4 或以上。
 
 本地开发可在 `.env` 配置 `STORAGE_DRIVER=files`、`RESOURCE_DRIVER=files`，运行 `npm run dev` 启动 Vite 与开发后端。文件模式只为离线开发与旧记录迁移保留；容器生产后端强制使用 PostgreSQL 和 Redis。
 
