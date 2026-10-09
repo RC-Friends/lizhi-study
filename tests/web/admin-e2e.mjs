@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
+import { checkPageRecovery } from './recovery-e2e.mjs';
 
 export async function checkAdministration({ browser, base, adminPassword, learnerPassword, screenshot, modelEndpoint, ragModels }) {
+  await checkPageRecovery({ browser, base, adminPassword, screenshot });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1050 } });
   const page = await context.newPage(), errors = []; page.on('pageerror', error => errors.push(error.message)); page.setDefaultTimeout(20000);
   const adminNav = name => page.getByRole('navigation', { name: '站点管理导航' }).getByRole('button', { name, exact: true });

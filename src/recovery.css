@@ -1,0 +1,13 @@
+.app-recovery { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: #f6f7f2; color: #283c30; }
+.app-recovery-card { width: min(100%, 540px); padding: 36px; border: 1px solid #e1e7d8; border-radius: 18px; background: #fff; }
+.app-recovery-icon { display: grid; place-items: center; width: 54px; height: 54px; border-radius: 14px; background: #edf2e4; color: #64804e; margin-bottom: 22px; }
+.app-recovery-brand { font-size: 11px; color: #859676; }
+.app-recovery-card h1 { font-size: 25px; line-height: 1.5; margin: 8px 0 14px; }
+.app-recovery-card p { font-size: 13px; line-height: 1.9; color: #718263; }
+.app-recovery-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 25px 0; }
+.app-recovery-card details { padding: 16px 0; border-top: 1px solid #e5ebde; font-size: 12px; color: #718263; }
+.app-recovery-card summary { cursor: pointer; }
+.app-recovery-card details p { margin-top: 12px; font-size: 11px; }
+.app-recovery-card textarea { display: block; width: 100%; min-height: 180px; margin-top: 12px; padding: 12px; resize: vertical; border: 1px solid #dce4d2; border-radius: 8px; background: #f8faf5; color: #526646; font: 11px/1.7 monospace; }
+.app-recovery-card > .text-button { margin-top: 12px; }
+@media (max-width: 540px) { .app-recovery { padding: 16px; } .app-recovery-card { padding: 25px; } .app-recovery-card h1 { font-size: 22px; } .app-recovery-actions > button { width: 100%; } }

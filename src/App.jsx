@@ -343,6 +343,11 @@ export default function App() {
     finally { setLoading(false); }
   }
   useEffect(() => { boot(); }, []);
+  // The administrator entry is at the bottom of the guest page. Move to the
+  // new page after the login dialog has closed instead of retaining its scroll.
+  useEffect(() => {
+    if (learner?.role === 'admin' && !loading && !loginOpen) window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+  }, [learner?.role, loading, loginOpen]);
   useEffect(() => {
     const expire = () => {
       setLoginRole(savedSession()?.role === 'admin' ? 'admin' : 'learner');
