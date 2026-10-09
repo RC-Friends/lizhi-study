@@ -7,7 +7,7 @@ import { ArrowUpRight, ArrowRight, ArrowLeft, Check, ChevronDown, ChevronRight, 
   CircleCheck, CircleX, LoaderCircle, RotateCcw, Image as ImageIcon, Download, Plus,
   Clock3, Eye, Layers3, Radio, ShieldCheck, FileText, ExternalLink, WifiOff, Target,
   ChartNoAxesCombined, MousePointer2, ListChecks, CircleDot, ScanEye } from 'lucide-react';
-import { api, savedMatch, saveMatch, savedSession, saveSession, streamMatch } from './api';
+import { api, savedMatch, saveMatch, savedSession, saveSession, streamMatch, SESSION_KEY } from './api';
 import LearningHub, { LearnerLogin } from './LearningHub';
 import { CoachPanel, QuestionNotebook } from './StudyTools';
 import AdminPanel from './AdminPanel.jsx';
@@ -248,20 +248,25 @@ export default function App() {
   const [loginOpen, setLoginOpen] = useState(false), [expired, setExpired] = useState(false), [rulesOpen, setRulesOpen] = useState(false), [finishOpen, setFinishOpen] = useState(false), [image, setImage] = useState(null);
   const [connection, setConnection] = useState('connected');
   const [loginRole, setLoginRole] = useState('learner');
+  const [adminObserver, setAdminObserver] = useState(false);
   const hubRequest = useRef(0), filters = useRef({ wrong: {}, bookmarks: {} }), collectionRequests = useRef({}), pendingMatch = useRef(null);
+  const bootRequest = useRef(0), accountToken = useRef(null), sessionChecks = useRef(new Set()), bootLatest = useRef(null), loadingRef = useRef(loading);
+  loadingRef.current = loading;
   const pages = useRef({ history: 1, wrong: 1, bookmarks: 1 }), hubRevision = useRef(null);
   const liveMatch = useRef(match); liveMatch.current = match;
   const applySnapshot = snapshot => setMatch(current => current?.id === snapshot.id && snapshot.revision >= current.revision ? snapshot : current);
   function pageMeta(response) { return { total: response.total, hasMore: response.page < response.pages, loading: false }; }
   function listUrl(kind, account, page = 1) {
     const query = new URLSearchParams({ page, pageSize: 20 });
-    if (kind === 'history') return `/api/${account ? 'learning' : 'public'}/history?${query}`;
+    if (kind === 'history') return `/api/${account?.role === 'learner' ? 'learning' : 'public'}/history?${query}`;
     query.set('kind', kind === 'bookmarks' ? 'bookmarked' : 'wrong');
     for (const [key, value] of Object.entries(filters.current[kind] || {})) if (value !== '' && value !== undefined) query.set(key, String(value));
     return `/api/learning/questions?${query}`;
   }
   async function refreshHub(account = learner, quiet = false) {
-    if (account?.role === 'admin') { setHubLoading(false); return; }
+    // Administrators supervise the same public projection as visitors. Their
+    // JWT remains an administrator JWT and never calls learner-only endpoints.
+    if (account?.role === 'admin') account = null;
     const request = ++hubRequest.current;
     const filterKey = JSON.stringify(filters.current);
     for (const kind of ['history', 'wrong', 'bookmarks']) collectionRequests.current[kind] = (collectionRequests.current[kind] || 0) + 1;
@@ -301,47 +306,65 @@ export default function App() {
     } catch (e) { if (collectionRequests.current[kind] !== request || epoch !== hubRequest.current) return; setError(e.message); setHub(current => current ? { ...current, pages: { ...current.pages, [kind]: { ...current.pages?.[kind], loading: false } } } : current); }
   }
   async function openRecord(id, account = learner, push = true) {
+    const sessionToken = savedSession()?.token;
     setBusy(true); setError('');
     try {
       const record = await api(`/api/${account ? 'learning/records' : 'public/matches'}/${encodeURIComponent(id)}`);
+      if (savedSession()?.token !== sessionToken) return;
       setCredentials(null); setReadOnly(!account); setMatch(record);
       if (push) window.history.pushState(null, '', `#record/${record.id}`);
       window.scrollTo({ top: 0, behavior: 'instant' });
-    } catch (e) { setError(e.message); }
-    finally { setBusy(false); }
+    } catch (e) { if (savedSession()?.token === sessionToken) setError(e.message); }
+    finally { if (savedSession()?.token === sessionToken) setBusy(false); }
   }
   async function resume(id, account = learner, push = true) {
     if (!account) { pendingMatch.current = id; setLoginOpen(true); return; }
+    const sessionToken = savedSession()?.token;
     setBusy(true); setError('');
     try {
       const saved = savedMatch(), creds = { id, ...(saved?.id === id && saved.token ? { token: saved.token } : {}) };
       let current = await api(`/api/matches/${id}`, { token: creds.token });
+      if (savedSession()?.token !== sessionToken) return;
       if (current.status === 'active' && current.settings.mode === 'practice' && current.current?.paused) current = await api(`/api/matches/${id}/resume`, { method: 'POST', token: creds.token, body: {} });
+      if (savedSession()?.token !== sessionToken) return;
       saveMatch(current.status === 'active' ? creds : null); setCredentials(creds); setMatch(current); setReadOnly(false);
       if (push) window.history.pushState(null, '', `#match/${id}`);
       window.scrollTo({ top: 0, behavior: 'instant' });
-    } catch (e) { setError(e.message); if (e.status === 404) saveMatch(null); }
-    finally { setBusy(false); }
+    } catch (e) { if (savedSession()?.token === sessionToken) { setError(e.message); if (e.status === 404) saveMatch(null); } }
+    finally { if (savedSession()?.token === sessionToken) setBusy(false); }
   }
   async function boot() {
+    const request = ++bootRequest.current, sessionToken = savedSession()?.token;
+    const current = () => request === bootRequest.current && savedSession()?.token === sessionToken;
     setLoading(true); setError('');
     try {
-      setCatalog(await api('/api/catalog'));
+      const nextCatalog = await api('/api/catalog');
+      if (!current()) return;
+      setCatalog(nextCatalog);
       let account = null;
-      if (savedSession()?.token) {
-        try { account = await api('/api/session'); setLearner(account); }
-        catch (e) { if (e.status === 401) { saveSession(null); setExpired(true); } else throw e; }
+      if (sessionToken) {
+        try { account = await api('/api/session'); }
+        catch (e) { if (!current()) return; if (e.status === 401) { saveSession(null); setExpired(true); } else throw e; }
       }
+      if (!current()) return;
+      accountToken.current = account ? sessionToken : null; setLearner(account);
       await refreshHub(account);
-      if (account?.role === 'admin') return;
-      if (window.location.hash.startsWith('#admin')) { setLoginRole('admin'); setLoginOpen(true); }
+      if (!current()) return;
       const route = window.location.hash.match(/^#(record|match)\/([a-f0-9-]+)$/);
+      if (account?.role === 'admin') {
+        setAdminObserver(/^#(?:public|history|skill)$/.test(window.location.hash) || route?.[1] === 'record');
+        if (route?.[1] === 'record') await openRecord(route[2], null, false);
+        return;
+      }
+      setAdminObserver(false);
+      if (window.location.hash.startsWith('#admin')) { setLoginRole('admin'); setLoginOpen(true); }
       if (route?.[1] === 'record') await openRecord(route[2], account, false);
       else if (route?.[1] === 'match') await resume(route[2], account, false);
       else if (!window.location.hash && account && savedMatch()?.id) await resume(savedMatch().id, account, false);
-    } catch (e) { setError(e.message); }
-    finally { setLoading(false); }
+    } catch (e) { if (current()) setError(e.message); }
+    finally { if (request === bootRequest.current) setLoading(false); }
   }
+  bootLatest.current = boot;
   useEffect(() => { boot(); }, []);
   // The administrator entry is at the bottom of the guest page. Move to the
   // new page after the login dialog has closed instead of retaining its scroll.
@@ -349,19 +372,50 @@ export default function App() {
     if (learner?.role === 'admin' && !loading && !loginOpen) window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
   }, [learner?.role, loading, loginOpen]);
   useEffect(() => {
-    const expire = () => {
+    const expire = event => {
+      if (event.detail?.token && event.detail.token !== savedSession()?.token) return;
       setLoginRole(savedSession()?.role === 'admin' ? 'admin' : 'learner');
       pendingMatch.current = match?.status === 'active' ? match.id : null;
-      saveSession(null); setLearner(null); setCredentials(null); setMatch(null); setHub(null); setExpired(true); setLoginOpen(true); setBusy(false);
+      ++bootRequest.current; accountToken.current = null;
+      setReadOnly(false); setRulesOpen(false); setFinishOpen(false); setImage(null);
+      saveSession(null); setLearner(null); setCredentials(null); setMatch(null); setHub(null); setAdminObserver(false); setLoading(false); setExpired(true); setLoginOpen(true); setBusy(false);
       refreshHub(null);
     };
     window.addEventListener('learner-session-expired', expire);
     return () => window.removeEventListener('learner-session-expired', expire);
   }, [match?.id]);
   useEffect(() => {
+    const syncStoredSession = () => {
+      if ((savedSession()?.token || null) === accountToken.current) return;
+      if (window.location.hash.startsWith('#admin') && savedSession()?.role !== 'admin') window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      ++bootRequest.current; ++hubRequest.current;
+      pendingMatch.current = null;
+      setReadOnly(false); setRulesOpen(false); setFinishOpen(false); setImage(null);
+      setLearner(null); setMatch(null); setCredentials(null); setHub(null); setAdminObserver(false); setLoginOpen(false); setExpired(false); setBusy(false);
+      bootLatest.current();
+    };
+    const storage = event => { if (event.key === SESSION_KEY || event.key === null) syncStoredSession(); };
+    const validate = () => {
+      if (document.hidden || loadingRef.current) return;
+      const token = savedSession()?.token || null;
+      if (token !== accountToken.current) { syncStoredSession(); return; }
+      if (!token || sessionChecks.current.has(token)) return;
+      sessionChecks.current.add(token);
+      api('/api/session').catch(() => { /* A confirmed 401 expires only its own JWT; a network error retains the session. */ })
+        .finally(() => sessionChecks.current.delete(token));
+    };
+    window.addEventListener('storage', storage); window.addEventListener('focus', validate);
+    window.addEventListener('pageshow', validate); document.addEventListener('visibilitychange', validate);
+    return () => { window.removeEventListener('storage', storage); window.removeEventListener('focus', validate); window.removeEventListener('pageshow', validate); document.removeEventListener('visibilitychange', validate); };
+  }, []);
+  useEffect(() => {
     const pop = async () => {
-      if (learner?.role === 'admin') return;
       const route = window.location.hash.match(/^#(record|match)\/([a-f0-9-]+)$/);
+      if (learner?.role === 'admin') {
+        if (route?.[1] === 'record') { setAdminObserver(true); openRecord(route[2], null, false); }
+        else { setAdminObserver(/^#(?:public|history|skill)$/.test(window.location.hash)); setMatch(null); setCredentials(null); refreshHub(); }
+        return;
+      }
       const outgoing = liveMatch.current;
       if (outgoing?.status === 'active' && outgoing.settings.mode === 'practice' && route?.[2] !== outgoing.id) {
         try { await api(`/api/matches/${outgoing.id}/pause`, { method: 'POST', body: {} }); }
@@ -372,9 +426,9 @@ export default function App() {
       else { saveMatch(null); setMatch(null); setCredentials(null); refreshHub(); }
     };
     window.addEventListener('popstate', pop); return () => window.removeEventListener('popstate', pop);
-  }, [learner]);
+  }, [learner, adminObserver]);
   useEffect(() => {
-    if (match || loading || learner?.role === 'admin') return;
+    if (match || loading || learner?.role === 'admin' && !adminObserver) return;
     let stopped = false, polling = false;
     const refresh = async (force = false) => {
       if (document.hidden || polling || stopped) return;
@@ -388,7 +442,7 @@ export default function App() {
     const focus = () => refresh(true);
     const timer = setInterval(refresh, 3000); window.addEventListener('focus', focus); document.addEventListener('visibilitychange', focus);
     return () => { stopped = true; clearInterval(timer); window.removeEventListener('focus', focus); document.removeEventListener('visibilitychange', focus); };
-  }, [Boolean(match), loading, learner]);
+  }, [Boolean(match), loading, learner, adminObserver]);
   useEffect(() => {
     if (!credentials || !learner || match?.status !== 'active') return;
     const controller = new AbortController(); let retryTimer;
@@ -408,10 +462,12 @@ export default function App() {
     connect(); return () => { controller.abort(); clearTimeout(retryTimer); };
   }, [credentials?.id, match?.status, Boolean(learner)]);
   async function login(password) {
+    ++bootRequest.current; ++hubRequest.current; setLoading(false);
     setBusy(true); setError('');
     try {
       const session = await api('/api/login', { method: 'POST', body: { password, role: loginRole } });
-      saveSession(session); setLearner(session); setLoginOpen(false); setExpired(false); await refreshHub(session);
+      saveSession(session); accountToken.current = session.token; setLearner(session); setLoginOpen(false); setExpired(false); setAdminObserver(false); await refreshHub(session);
+      if (savedSession()?.token !== session.token) return;
       if (session.role === 'admin') { pendingMatch.current = null; setMatch(null); setCredentials(null); window.history.replaceState(null, '', '#admin'); return; }
       if (pendingMatch.current) { const id = pendingMatch.current; pendingMatch.current = null; await resume(id, session); }
     } catch (e) { setError(e.message); }
@@ -422,11 +478,14 @@ export default function App() {
       try { await api(`/api/matches/${match.id}/pause`, { method: 'POST', body: {} }); } catch (e) { setError(e.message); return; }
     }
     saveMatch(null); setMatch(null); setCredentials(null); setError(''); setReadOnly(false);
-    window.history.pushState(null, '', window.location.pathname); window.scrollTo({ top: 0, behavior: 'instant' }); await refreshHub();
+    window.history.pushState(null, '', learner?.role === 'admin' ? adminObserver ? '#history' : '#admin' : window.location.pathname); window.scrollTo({ top: 0, behavior: 'instant' }); await refreshHub();
   }
   async function logout() {
     if (match?.status === 'active' && match.settings.mode === 'practice') await api(`/api/matches/${match.id}/pause`, { method: 'POST', body: {} }).catch(() => {});
-    saveSession(null); saveMatch(null); setLearner(null); setMatch(null); setCredentials(null); setHub(null); setError('');
+    ++bootRequest.current; accountToken.current = null;
+    pendingMatch.current = null;
+    setReadOnly(false); setRulesOpen(false); setFinishOpen(false); setImage(null);
+    saveSession(null); saveMatch(null); setLearner(null); setMatch(null); setCredentials(null); setHub(null); setAdminObserver(false); setLoginOpen(false); setExpired(false); setError('');
     window.history.replaceState(null, '', window.location.pathname); await refreshHub(null);
   }
   async function start(settings) {
@@ -454,9 +513,18 @@ export default function App() {
     catch (e) { setError(e.message); }
     finally { setBusy(false); }
   }
-  return <>{loading ? <div className="app-loading"><LoaderCircle size={30} className="spin" /><h2>小栗在整理自习室</h2><p>正在载入学习记录…</p></div> : !catalog ? <div className="app-loading"><WifiOff size={30} /><h2>暂时无法连接自习室</h2><p>{error}</p><button className="button primary" onClick={boot}>重新连接</button></div> : learner?.role === 'admin' ? <AdminPanel onLogout={logout} /> : !match ?
-    <LearningHub key={learner ? 'learner' : 'guest'} learner={learner} data={hub || {}} catalog={catalog} loading={hubLoading} busy={busy} error={error}
-      onLogin={() => { setError(''); setLoginRole('learner'); setLoginOpen(true); }} onAdminLogin={() => { setError(''); setLoginRole('admin'); setLoginOpen(true); }} onLogout={logout} onStart={start} onResume={resume} onReview={openRecord} onImage={setImage}
+  async function observe(view = 'public') {
+    setMatch(null); setCredentials(null); setError(''); setAdminObserver(true);
+    window.history.pushState(null, '', `#${view}`); window.scrollTo({ top: 0, behavior: 'instant' }); await refreshHub();
+  }
+  function returnAdmin() {
+    setMatch(null); setCredentials(null); setError(''); setAdminObserver(false);
+    window.history.pushState(null, '', '#admin'); window.scrollTo({ top: 0, behavior: 'instant' });
+  }
+  return <>{loading ? <div className="app-loading"><LoaderCircle size={30} className="spin" /><h2>小栗在整理自习室</h2><p>正在载入学习记录…</p></div> : !catalog ? <div className="app-loading"><WifiOff size={30} /><h2>暂时无法连接自习室</h2><p>{error}</p><button className="button primary" onClick={boot}>重新连接</button></div> : learner?.role === 'admin' && !adminObserver && !match ? <AdminPanel onLogout={logout} onObserve={observe} /> : !match ?
+    <LearningHub key={learner?.role === 'admin' ? 'admin-observer' : learner ? 'learner' : 'guest'} learner={learner?.role === 'admin' ? null : learner} data={hub || {}} catalog={catalog} loading={hubLoading} busy={busy} error={error}
+      onReturnAdmin={learner?.role === 'admin' ? returnAdmin : undefined}
+      onLogin={() => { setError(''); setLoginRole('learner'); setLoginOpen(true); }} onAdminLogin={learner?.role === 'admin' ? undefined : () => { setError(''); setLoginRole('admin'); setLoginOpen(true); }} onLogout={logout} onStart={start} onResume={resume} onReview={id => openRecord(id, learner?.role === 'admin' ? null : learner)} onImage={setImage}
       onBookmark={(id, bookmarked) => annotate(id, { bookmarked })} onMaster={(id, mastered) => annotate(id, { mastered })}
       onRefresh={() => { setError(''); refreshHub(); }} onLoadMore={kind => loadCollection(kind, true)} onNotebookFilter={(kind, nextFilters) => loadCollection(kind, false, nextFilters)}
       onAvailability={settings => api('/api/learning/availability', { method: 'POST', body: settings })}

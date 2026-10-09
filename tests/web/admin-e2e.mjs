@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { checkPageRecovery } from './recovery-e2e.mjs';
+import { checkAdminObservation } from './admin-observer-e2e.mjs';
 
 export async function checkAdministration({ browser, base, adminPassword, learnerPassword, screenshot, modelEndpoint, ragModels }) {
   await checkPageRecovery({ browser, base, adminPassword, screenshot });
+  await checkAdminObservation({ browser, base, adminPassword, learnerPassword, screenshot });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1050 } });
   const page = await context.newPage(), errors = []; page.on('pageerror', error => errors.push(error.message)); page.setDefaultTimeout(20000);
   const adminNav = name => page.getByRole('navigation', { name: '站点管理导航' }).getByRole('button', { name, exact: true });
@@ -26,7 +28,7 @@ export async function checkAdministration({ browser, base, adminPassword, learne
     await page.getByLabel('超级管理员口令', { exact: true }).fill(adminPassword);
     await page.getByRole('button', { name: '进入管理面板', exact: true }).click();
     await page.getByRole('navigation', { name: '站点管理导航' }).waitFor();
-    await page.locator('.ad-service').first().waitFor(); await screenshot(page, 'admin-overview');
+    await page.locator('.admin-service').first().waitFor(); await screenshot(page, 'admin-overview');
     await page.reload(); await adminNav('模型配置').click();
     await page.locator('#ai-baseurl').waitFor();
     await page.locator('#ai-baseurl').fill(modelEndpoint || 'https://example.org/v1');
@@ -78,7 +80,7 @@ export async function checkAdministration({ browser, base, adminPassword, learne
     } else await page.getByLabel('试着问一句', { exact: true }).fill('相遇问题');
     await page.getByRole('button', { name: '检索资料', exact: true }).click();
     await page.getByRole('status').filter({ hasText: modelEndpoint ? '已结合语义与关键词检索' : '已使用关键词检索' }).waitFor();
-    assert.ok(await page.locator('.ad-rag-results article').count() > 0); await screenshot(page, 'admin-embedding');
+    assert.ok(await page.locator('.admin-rag-results article').count() > 0); await screenshot(page, 'admin-embedding');
     await page.setViewportSize({ width: 390, height: 844 }); await screenshot(page, 'admin-mobile-embedding'); await page.setViewportSize({ width: 1440, height: 1050 });
     await page.getByRole('button', { name: 'Rerank 重排', exact: true }).click();
     await page.getByRole('heading', { name: 'Rerank 重排', exact: true }).waitFor();
@@ -105,7 +107,7 @@ export async function checkAdministration({ browser, base, adminPassword, learne
         await page.getByRole('button', { name: '检索资料', exact: true }).click(); const result = await (await response).json();
         assert.equal(result.mode, embeddingEnabled ? 'hybrid' : 'keyword'); assert.equal(result.rerank.applied, rerankEnabled); assert.ok(result.items.length > 0);
         await page.getByRole('status').filter({ hasText: `找到 ${result.items.length} 个片段` }).waitFor();
-        assert.equal((await page.locator('.ad-rag-results').innerText()).includes('已重排'), rerankEnabled);
+        assert.equal((await page.locator('.admin-rag-results').innerText()).includes('已重排'), rerankEnabled);
         await screenshot(page, `rag-e${Number(embeddingEnabled)}-r${Number(rerankEnabled)}`);
       }
     } else await screenshot(page, 'admin-rerank');

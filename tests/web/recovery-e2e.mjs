@@ -12,7 +12,11 @@ export async function checkPageRecovery({ browser, base, adminPassword, screensh
     await page.getByLabel('超级管理员口令', { exact: true }).fill(adminPassword);
     await page.getByRole('button', { name: '进入管理面板', exact: true }).click();
     await nav().waitFor();
-    await page.waitForFunction(() => scrollY === 0 && document.querySelector('.ad-main h1')?.getBoundingClientRect().top >= 0);
+    // EasyList's generic .ad-main rule hid the complete management body.
+    // Keep that rule active and verify both the page and service cards remain.
+    await page.addStyleTag({ content: '.ad-main { display: none !important; }' });
+    await page.locator('.admin-main').waitFor({ state: 'visible' });
+    await page.waitForFunction(() => scrollY === 0 && document.querySelector('.admin-main h1')?.getBoundingClientRect().top >= 0);
     assert.deepEqual(errors, []);
     await screenshot(page, 'admin-mobile-login-position');
 

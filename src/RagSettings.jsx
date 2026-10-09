@@ -33,27 +33,27 @@ export default function RagSettings({ revision }) {
     try { setResult(await api(`/api/kb/search?q=${encodeURIComponent(query.trim())}`, { timeoutMs: 25000 })); }
     catch (issue) { setError(issue.message); } finally { setBusy(''); }
   };
-  return <section className="ad-rag" aria-label="知识库检索">
+  return <section className="admin-rag" aria-label="知识库检索">
     <div className="kh-section-title"><BookOpen size={18} /><div><h2>让小栗读懂你的资料</h2><p>语义与关键词一起找依据，出题仍然引用原资料。</p></div></div>
-    {status && <div className="ad-rag-index">
+    {status && <div className="admin-rag-index">
       <div><strong>{status.ready}<span> / {status.total} 段</span></strong><small>{!status.configured ? '语义检索待配置' : status.working ? '正在建立索引' : status.ready === status.total ? '索引已就绪' : '资料分批准备中'}</small></div>
       <progress aria-label="向量索引进度" value={status.ready} max={Math.max(1, status.total)} />
       <button type="button" className="button ghost small" disabled={Boolean(busy) || !status.configured} onClick={() => rebuild()}>{busy === 'index' ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}更新索引</button>
-      {status.failed > 0 && <p className="ad-rag-warning">{status.failed} 段生成失败。检查模型连接后，点击「更新索引」重试。</p>}
+      {status.failed > 0 && <p className="admin-rag-warning">{status.failed} 段生成失败。检查模型连接后，点击「更新索引」重试。</p>}
     </div>}
     <p className="kh-input-hint">新资料会自动加入索引。准备期间继续用关键词检索。{status?.rerank?.configured ? '已启用 Rerank，将进一步比较候选资料的相关度。' : 'Rerank 未启用，使用检索原排序。'}</p>
-    <form className="kh-form ad-rag-search" onSubmit={search}>
+    <form className="kh-form admin-rag-search" onSubmit={search}>
       <div className="field"><label htmlFor="rag-query">试着问一句</label><input id="rag-query" maxLength={100} placeholder="例如：怎么计算追上前面那个人的时间？" value={query} disabled={Boolean(busy)} onChange={event => setQuery(event.target.value)} /></div>
       <button className="button primary" disabled={Boolean(busy) || !query.trim()}>{busy === 'search' ? <LoaderCircle className="spin" size={15} /> : <Search size={15} />}检索资料<ArrowRight size={14} /></button>
     </form>
     {error && <div className="kh-notice error" role="alert"><CircleX size={16} /><span>{error}</span></div>}
-    {result && <div className="ad-rag-results" role="region" aria-label="检索结果">
+    {result && <div className="admin-rag-results" role="region" aria-label="检索结果">
       <div className="kh-notice" role="status"><CircleCheck size={16} /><span>{result.mode === 'hybrid' ? '已结合语义与关键词检索' : '已使用关键词检索'}{result.rerank?.applied ? ' · 已重排' : ''} · 找到 {result.items.length} 个片段</span></div>
       {result.fallback && <p className="kh-input-hint">{fallbackText[result.fallback]}</p>}
       {result.rerank?.fallback === 'unavailable' && <p className="kh-input-hint">重排服务暂时不可用，本次保留检索原排序。</p>}
       {result.items.map(item => <article key={`${item.document.id}:${item.index}`}><div><BookOpen size={14} /><strong>{item.document.title}</strong><span>{item.anchor}</span></div><p>{item.text}</p>{item.retrieval?.includes('semantic') && <small>语义相关度 {Math.round(item.similarity * 100)}% </small>}{typeof item.rerankScore === 'number' && <small>重排相关度 {Math.round(item.rerankScore * 100)}%</small>}</article>)}
       {!result.items.length && <p className="kh-input-hint">暂时没有找到依据，可以换个问法或先收录相关资料。</p>}
     </div>}
-    {status?.configured && <details className="ad-rag-rebuild"><summary>重新生成全部向量</summary><p>同名模型在服务端更新后，可重新生成全部向量。会重新调用 Embedding 服务并产生用量。</p>{confirm ? <div className="kh-dialog-actions"><button type="button" className="button ghost small" disabled={Boolean(busy)} onClick={() => setConfirm(false)}>取消</button><button type="button" className="button primary small" disabled={Boolean(busy)} onClick={() => rebuild(true)}>确认重新生成</button></div> : <button type="button" className="text-button" disabled={Boolean(busy)} onClick={() => setConfirm(true)}>重新生成全部向量<RefreshCw size={13} /></button>}</details>}
+    {status?.configured && <details className="admin-rag-rebuild"><summary>重新生成全部向量</summary><p>同名模型在服务端更新后，可重新生成全部向量。会重新调用 Embedding 服务并产生用量。</p>{confirm ? <div className="kh-dialog-actions"><button type="button" className="button ghost small" disabled={Boolean(busy)} onClick={() => setConfirm(false)}>取消</button><button type="button" className="button primary small" disabled={Boolean(busy)} onClick={() => rebuild(true)}>确认重新生成</button></div> : <button type="button" className="text-button" disabled={Boolean(busy)} onClick={() => setConfirm(true)}>重新生成全部向量<RefreshCw size={13} /></button>}</details>}
   </section>;
 }

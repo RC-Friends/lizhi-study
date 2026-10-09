@@ -69,7 +69,7 @@ try {
   await page.getByRole('navigation', { name: '站点管理导航' }).getByRole('button', { name: '模型配置', exact: true }).click();
   for (const name of ['Embedding 检索', 'Rerank 重排']) {
     await page.getByRole('button', { name, exact: true }).click();
-    const advanced = page.locator('.ad-model-advanced'); if (!await advanced.evaluate(element => element.open)) await advanced.locator('summary').click();
+    const advanced = page.locator('.admin-model-advanced'); if (!await advanced.evaluate(element => element.open)) await advanced.locator('summary').click();
     await page.locator('#model-timeout').fill('1000'); await page.getByRole('button', { name: '保存模型配置', exact: true }).click();
     await page.getByRole('status').filter({ hasText: '已保存' }).waitFor();
   }
