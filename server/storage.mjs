@@ -109,7 +109,7 @@ export class PostgresStore {
       validateLearning(store.learning, bank);
       store.kbLibraries = (await store.client.query('SELECT payload FROM study_kb_libraries ORDER BY payload->>\'createdAt\', id')).rows.map(row => validateLibrary(row.payload));
       store.kb = (await store.client.query('SELECT payload FROM study_kb_documents ORDER BY uploaded_at, id')).rows.map(row => validateKnowledge(row.payload));
-      store.aiConfig = (await store.client.query("SELECT payload FROM study_ai_config WHERE id='platform'")).rows.map(row => row.payload);
+      store.aiConfig = (await store.client.query("SELECT id,payload FROM study_ai_config WHERE id='platform'")).rows.map(row => ({ id: row.id, value: row.payload }));
       store.kbDrafts = (await store.client.query('SELECT payload FROM study_kb_drafts ORDER BY created_at, id')).rows.map(row => validateDraft(row.payload));
       return store;
     } catch (error) {

@@ -5,6 +5,7 @@ RUN npm ci --no-audit --no-fund
 COPY index.html vite.config.js ./
 COPY src ./src
 COPY public ./public
+COPY examples/question-bank/questions.json ./examples/question-bank/questions.json
 RUN npm run build
 
 FROM nginxinc/nginx-unprivileged:1.28-alpine AS frontend

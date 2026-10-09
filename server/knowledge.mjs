@@ -176,6 +176,7 @@ export class KnowledgeService {
     const library = validateLibrary({ id: crypto.randomUUID(), ownerId, name, description,
       visibility, createdAt: new Date(this.clock()).toISOString() });
     this.libraries.set(library.id, library); this.save();
+    if (this.storage) this.storage.saveKbLibrary(library);
     return this.libraryBrief(library);
   }
   updateLibrary(id, patch = {}, ownerId) {
@@ -216,7 +217,7 @@ export class KnowledgeService {
       .sort((a, b) => Date.parse(b.uploadedAt) - Date.parse(a.uploadedAt) || (a.id < b.id ? -1 : 1))
       .map(({ chunks, ...brief }) => ({ ...brief, chunkCount: chunks.length,
         preview: brief.format === 'image' ? '图片资料 · 待 AI 转写后参与出题' : chunks[0].text.slice(0, 80) }));
-    return { library: this.libraryBrief(library), items, total: items.length };
+    return { library: { ...this.libraryBrief(library), mine: library.ownerId === ownerId }, items, total: items.length };
   }
   getDocument(libraryId, docId, ownerId) {
     this.requireLibrary(libraryId, ownerId);
@@ -256,7 +257,7 @@ export class KnowledgeService {
     if (size > KB_LIMITS.fileBytes) throw new HttpError(400, `文件不能超过 ${Math.round(KB_LIMITS.fileBytes / 1024 / 1024)} MiB。`);
     const sha256 = crypto.createHash('sha256').update(fileBase64, 'base64').digest('hex');
     const existing = this.byHash.get(`${libraryId}:${sha256}`);
-    if (existing) return { document: this.get(existing), duplicate: true };
+    if (existing) return { document: this.documents.get(existing), duplicate: true };
     const text = await extractDocumentText(format, fileBase64);
     if (!text.trim()) throw new HttpError(400, '这份文件里没有可提取的文字（可能是扫描版或空文档），暂无法参与出题。');
     const chunks = chunkDocument('text', text);

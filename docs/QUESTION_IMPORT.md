@@ -104,7 +104,7 @@ npm run questions:import -- --input=my-bank/questions.json \
 
 ## 启用管理 API
 
-管理接口默认关闭。运行后端时配置三个**独立的管理员变量**：
+命令行导入使用以下三个**独立的管理员变量**；网页管理面板也可用超级管理员 JWT 调用同一套接口：
 
 ```dotenv
 QUESTION_IMPORT_TOKEN=
@@ -112,9 +112,9 @@ QUESTION_IMPORT_S3_ACCESS_KEY_ID=
 QUESTION_IMPORT_S3_SECRET_ACCESS_KEY=
 ```
 
-令牌至少 32 字节，不能复用考生口令或 JWT 签名密钥。可以用 `openssl rand -hex 32` 生成并保存到受保护的本地配置。后两个变量使用资源 bucket 的 Read/Write 发布凭证；`stack:prepare` 生成的 `deploy/local/seaweedfs-publisher.json` 已包含这种身份。日常读取仍使用原来的只读 `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY`。
+令牌至少 32 字节，不能复用考生口令、超级管理员口令或 JWT 签名密钥。可以用 `openssl rand -hex 32` 生成并保存到受保护的本地配置。后两个变量使用资源 bucket 的 Read/Write 发布凭证；`stack:prepare` 生成的 `deploy/local/seaweedfs-publisher.json` 已包含这种身份。日常读取仍使用原来的只读 `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY`。
 
-把这些变量添加到 `.env.stack`；Kubernetes 渲染器会把它们放入后端 Secret。变量没有配置时接口返回 404；只配置令牌时可以获取 Schema 和校验 JSON，上传需要发布凭证，在线启用需要 PostgreSQL + Redis + SeaweedFS。
+把这些变量添加到 `.env.stack`；Kubernetes 渲染器会把它们放入后端 Secret。`QUESTION_IMPORT_TOKEN` 和 `SUPERADMIN_PASSWORD` 都未配置时接口返回 404；只启用登录身份时可以获取 Schema 和校验 JSON，上传需要发布凭证，在线启用需要 PostgreSQL + Redis + SeaweedFS。
 
 管理令牌仅供维护者使用。不要发给备考用户、存入浏览器 localStorage 或写到 `VITE_*`。考生 JWT 与游客身份均不能导入题库。
 
@@ -152,7 +152,7 @@ HTTP 客户端只接受 HTTPS 或 loopback HTTP，也不跟随重定向，以免
 
 ## HTTP 接口
 
-所有接口以 `/api/admin/question-bank` 开头，并使用 `Authorization: Bearer <QUESTION_IMPORT_TOKEN>`。不接受 URL 查询参数中的令牌。
+所有接口以 `/api/admin/question-bank` 开头，并使用 `Authorization: Bearer <QUESTION_IMPORT_TOKEN>`，或由网页发送超级管理员 JWT。不接受 URL 查询参数中的令牌；考生 JWT 不可使用。
 
 | 方法与路径 | 请求 | 响应 |
 | --- | --- | --- |

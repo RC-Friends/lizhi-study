@@ -15,12 +15,12 @@ async function failure(response, login = false) {
   if (response.status === 401 && !login && savedSession()) window.dispatchEvent(new Event('learner-session-expired'));
   throw error;
 }
-export async function api(url, { method = 'GET', body, token, signal } = {}) {
+export async function api(url, { method = 'GET', body, token, signal, raw = false, timeoutMs = 20000 } = {}) {
   let response;
   try {
-    const timeout = AbortSignal.timeout(20000);
-    response = await fetch(url, { method, signal: signal ? AbortSignal.any([signal, timeout]) : timeout, headers: headers(token, body !== undefined),
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
+    const timeout = AbortSignal.timeout(timeoutMs);
+    response = await fetch(url, { method, signal: signal ? AbortSignal.any([signal, timeout]) : timeout, headers: { ...headers(token, body !== undefined && !raw), ...(raw ? { 'Content-Type': 'application/octet-stream' } : {}) },
+      ...(body !== undefined ? { body: raw ? body : JSON.stringify(body) } : {}) });
   } catch (error) {
     if (error.name === 'TimeoutError') throw new Error('网络响应有点慢，请稍后重试。');
     if (error.name === 'TypeError') throw new Error('暂时连不上自习室，请检查网络后重试。');

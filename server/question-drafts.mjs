@@ -57,7 +57,7 @@ export class DraftService {
   constructor(config, { storage = null, persist = true, complete = null, llmResolver = null, clock = Date.now } = {}) {
     this.config = config; this.storage = storage; this.persist = persist;
     this.llmResolver = llmResolver || (() => this.config.llm);
-    this.complete = complete || ((llm, messages) => { let text = ''; return streamCompletion(llm, { messages, max_tokens: llm.maxTokens || 4096, temperature: 0.6 }, { onText: delta => { text += delta; } }).then(() => text); });
+    this.complete = complete || completeDraft;
     this.clock = clock;
     this.filename = config.draftsPath || path.join(path.dirname(config.runtimePath), 'drafts.json');
     this.drafts = new Map();
@@ -88,26 +88,30 @@ export class DraftService {
     return { items, total: items.length };
   }
   async generate(input = {}, knowledge = null, ownerId = null) {
+    const prepared = this.prepare(input, knowledge, ownerId);
+    return this.accept(prepared, await this.complete(prepared.llm, prepared.messages));
+  }
+  prepare(input = {}, knowledge = null, ownerId = null) {
     const query = typeof input.query === 'string' ? input.query.trim() : '';
     if (!query || query.length > 100) throw new HttpError(400, '请输入 1—100 字的出题主题或知识点。');
     const module = input.module || null;
     if (module && !MODULES.includes(module)) throw new HttpError(400, '出题模块无效。');
     const count = input.count ?? 3;
     if (!Number.isInteger(count) || count < 1 || count > DRAFT_LIMITS.count) throw new HttpError(400, `一次生成 1—${DRAFT_LIMITS.count} 道。`);
-    if (!this.ready()) throw new HttpError(409, '尚未配置模型服务：到「学习设置 → AI 模型」里填入 Base URL 和 API Key 就能出题。', 'llm_not_configured');
+    if (!this.ready()) throw new HttpError(409, '尚未配置模型服务，请联系管理员在管理面板中配置出题模型。', 'llm_not_configured');
     if (!knowledge) throw new HttpError(400, '知识库服务不可用。');
-    const remaining = DRAFT_LIMITS.total - this.list({ status: 'all' }).total;
-    if (remaining <= 0) throw new HttpError(400, `草稿区已满（${DRAFT_LIMITS.total} 条），请先处理现有草稿。`);
     const sources = knowledge.searchChunks(query, { limit: 5, ownerId });
     if (!sources.length) throw new HttpError(400, '知识库里没有找到与该主题相关的片段，请先上传相关资料或换个关键词。');
     const keys = sources.map((_, index) => `K${index + 1}`);
     const materials = sources.map((chunk, index) => `[K${index + 1}] 《${chunk.document.title}》· ${chunk.anchor}\n${chunk.text}`).join('\n\n');
     const llm = { ...this.llmResolver(), maxTokens: Math.max(this.llmResolver()?.maxTokens || 0, 4096) };
-    const text = await this.complete(llm, buildPrompt(query, module, Math.min(count, remaining), materials));
+    return { llm, messages: buildPrompt(query, module, count, materials), count, module, sources, keys };
+  }
+  accept({ count, module, sources, keys }, text) {
     const parsed = parseQuestions(text);
     const createdAt = new Date(this.clock()).toISOString();
     const created = [];
-    for (const raw of parsed.slice(0, Math.min(count, remaining))) {
+    for (const raw of parsed.slice(0, count)) {
       const draft = normalizeDraft(raw, keys);
       if (!draft) continue;
       const origin = sources[keys.indexOf(draft.source)];
@@ -116,6 +120,13 @@ export class DraftService {
       this.drafts.set(record.id, record); created.push(record);
     }
     if (!created.length) throw new HttpError(502, '模型返回的题目均未通过校验，请重试或更换资料。', 'generation_invalid');
+    // Direct practice has no draft-inbox UI. Keep a bounded recent history
+    // instead of permanently blocking generation after 200 questions.
+    const keep = new Set(created.map(draft => draft.id));
+    const oldest = this.list({ status: 'all' }).items.filter(draft => !keep.has(draft.id)).reverse();
+    while (this.drafts.size > DRAFT_LIMITS.total && oldest.length) {
+      const draft = oldest.shift(); this.drafts.delete(draft.id); this.storage?.deleteKbDraft(draft.id);
+    }
     if (this.storage) for (const record of created) this.storage.saveKbDraft(record);
     else this.save();
     return { drafts: created, sources: sources.map(({ document, anchor, score }) => ({ title: document.title, anchor, score })) };
@@ -154,4 +165,12 @@ export class DraftService {
       })),
     };
   }
+}
+
+export async function completeDraft(llm, messages) {
+  let text = '';
+  await streamCompletion(llm, { messages, max_tokens: llm.maxTokens || 4096, temperature: 0.6 }, {
+    signal: AbortSignal.timeout(llm.timeout || 120000), onText: delta => { text += delta; },
+  });
+  return text;
 }

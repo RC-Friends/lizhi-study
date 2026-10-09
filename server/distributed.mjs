@@ -7,6 +7,7 @@ import { CoachService } from './coach.mjs';
 import { HttpError } from './bank.mjs';
 import { SCHEMA, MATCH_UPSERT, matchValues, validateMatch, validateLearning, StorageError } from './storage.mjs';
 import { runLlm, runJev, runDemo, ProviderError } from './providers.mjs';
+import { bootstrapModelSettings, readModelConfig } from './ai-config.mjs';
 
 const LOCK = 'SELECT pg_advisory_xact_lock(1937012089, 2)';
 const JOB_SCHEMA = `
@@ -40,6 +41,7 @@ export class DistributedRuntime {
         const versions = await client.query("SELECT to_regclass('study_schema_migrations') AS name");
         if (versions.rows[0].name && (await client.query('SELECT max(version) AS version FROM study_schema_migrations')).rows[0].version > 3) throw new StorageError('数据库版本高于当前应用。');
         await client.query(SCHEMA); await client.query(JOB_SCHEMA);
+        await bootstrapModelSettings(client, config);
         if (runtime.resourceManager) await client.query('UPDATE study_state SET resource_version=COALESCE(resource_version,$1) WHERE id=1', [config.resourceVersion]);
       });
       runtime.resourcesReady = true;
@@ -88,9 +90,9 @@ export class DistributedRuntime {
     throw new StorageError('题库正在更新，请稍后重试。');
   }
   async withQuestions(work) {
-    if (!this.resourceManager) return work({ bank: this.bank, config: this.config, resources: this.config.questionResources, version: this.config.resourceVersion });
+    if (!this.resourceManager) return work({ bank: this.bank, config: await readModelConfig(this.pool, this.config), resources: this.config.questionResources, version: this.config.resourceVersion });
     const entry = await this.resourceManager.acquireCurrent(this.pool);
-    try { return await work(entry); } finally { entry.release(); }
+    try { return await work({ ...entry, config: await readModelConfig(this.pool, entry.config) }); } finally { entry.release(); }
   }
   async activateResources(version) {
     if (!this.resourceManager) throw new HttpError(503, '在线导入需要 PostgreSQL、Redis 和 SeaweedFS 资源模式。', 'activation_unavailable');
@@ -119,7 +121,7 @@ export class DistributedRuntime {
   async run(work, options = {}) {
     const changed = new Set();
     const operation = async client => {
-      const bank = client.questionContext?.bank || this.bank, config = client.questionContext?.config || this.config;
+      const bank = client.questionContext?.bank || this.bank, config = await readModelConfig(client, client.questionContext?.config || this.config);
       const jobs = options.readOnly ? [] : (await client.query("SELECT id FROM study_jobs WHERE status IN ('queued','running')")).rows;
       const pending = [], matches = new MatchService(bank, config, { persist: false, dispatch: job => pending.push(job) });
       const rows = options.matchId ? await client.query('SELECT payload FROM study_matches WHERE id=$1', [options.matchId])

@@ -17,7 +17,7 @@ const publisher = { accessKey: 'publisher-' + crypto.randomBytes(12).toString('h
 const dbPassword = secret(), redisPassword = secret(), bucket = 'xingce-resources';
 const env = {
   APP_ENV_FILE: './' + path.relative(process.cwd(), output), COMPOSE_PROJECT_NAME: 'xingce-study',
-  APP_BIND: '127.0.0.1', APP_PORT: '3210', SITE_PASSWORD: secret(), JWT_SECRET: secret(), JWT_TTL_DAYS: '30', LEARNER_NAME: '备考同学',
+  APP_BIND: '127.0.0.1', APP_PORT: '3210', SITE_PASSWORD: secret(), SUPERADMIN_PASSWORD: secret(), JWT_SECRET: secret(), JWT_TTL_DAYS: '30', LEARNER_NAME: '备考同学',
   PUBLIC_URL: '', TRUST_PROXY: '', STORAGE_DRIVER: 'postgres', POSTGRES_PASSWORD: dbPassword,
   DATABASE_URL: `postgresql://xingce:${dbPassword}@database:5432/xingce`, RESOURCE_DRIVER: 's3',
   REDIS_PASSWORD: redisPassword, REDIS_URL: `redis://:${redisPassword}@redis:6379/0`, REDIS_PREFIX: 'xingce:',

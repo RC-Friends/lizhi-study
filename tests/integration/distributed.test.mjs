@@ -17,6 +17,7 @@ const waitFor = async fn => { for (let i=0;i<150;i++) { const value=await fn(); 
 test('two stateless backends share durable state, jobs and streams', async t => {
   const bank = new QuestionBank('', [question]);
   const configuration = { ...config, databaseUrl: process.env.TEST_DATABASE_URL, redisUrl: process.env.TEST_REDIS_URL,
+    adminPassword: 'isolated-integration-admin-password',
     redisPrefix: 'integration:' + crypto.randomUUID() + ':', workerPollMs: 50, jobLeaseMs: 3000, serveFrontend: false };
   let calls = 0, coachCalls = 0;
   const gates = [];
@@ -136,5 +137,31 @@ test('two stateless backends share durable state, jobs and streams', async t => 
     b.runtime.startWorker();await waitFor(()=>calls===2);gates.shift()();
     await waitFor(async()=>(await get(b,`/api/matches/${mid}`)).data.current.phase==='revealed');
     assert.equal((await get(b,`/api/matches/${mid}`)).data.current.result.attempts,2);
+  });
+  await t.test('administrator model changes and libraries survive replica switches and stale bootstrap environments', async () => {
+    const c = await make(false);
+    const admin = (await request(b, '/api/login', { method: 'POST', body: { role: 'admin', password: configuration.adminPassword } })).data.token;
+    assert.equal((await request(c, '/api/session', { token: admin })).data.role, 'admin');
+    assert.equal((await get(c, '/api/ai/config')).status, 403);
+    const previous = (await request(b, '/api/public/revision')).data.dataRevision;
+    const current = (await request(b, '/api/ai/config', { token: admin })).data;
+    const changed = await request(b, '/api/ai/config', { method: 'PUT', token: admin,
+      body: { provider: 'llm', revision: current.revision, model: 'panel-configured-model', apiKey: 'panel-configured-secret' } });
+    assert.equal(changed.status, 200); assert.ok(!JSON.stringify(changed.data).includes('panel-configured-secret'));
+    assert.notEqual((await request(c, '/api/public/revision')).data.dataRevision, previous);
+    assert.equal((await request(c, '/api/catalog')).data.providers.llm.model, 'panel-configured-model');
+    assert.equal(await c.runtime.run(({ service }) => service.config.llm.key, { readOnly: true }), 'panel-configured-secret');
+    assert.equal(await c.runtime.withQuestions(({ config }) => config.llm.model), 'panel-configured-model');
+    const library = await request(b, '/api/kb/libraries', { method: 'POST', token: admin, body: { name: '跨副本备考资料' } });
+    assert.equal(library.status, 201); assert.equal(library.data.ownerId, 'primary');
+    const document = await post(c, `/api/kb/libraries/${library.data.id}/documents`, { title: '相遇问题', format: 'text', content: '相遇问题用路程除以速度和。' });
+    assert.equal(document.status, 201);
+    assert.equal((await get(b, `/api/kb/libraries/${library.data.id}`)).data.items.length, 1);
+    const stale = await request(c, '/api/ai/config', { method: 'PUT', token: admin, body: { revision: current.revision, model: 'stale-edit' } });
+    assert.equal(stale.status, 409);
+    const restarted = await DistributedRuntime.open(bank, { ...configuration, llm: { key: 'stale-environment-secret', model: 'stale-environment-model' } }, { worker: false });
+    opened.push(restarted);
+    assert.equal(await restarted.withQuestions(({ config }) => config.llm.model), 'panel-configured-model');
+    assert.equal(await restarted.withQuestions(({ config }) => config.llm.key), 'panel-configured-secret');
   });
 });

@@ -69,7 +69,7 @@ try {
   compose(['run', '--rm', '--no-deps', '-T', '-v', `${bundle}:/bundle:ro`, 'backend',
     'node', 'scripts/upload-resources.mjs', '--source=/bundle', '--credentials-stdin'], { input: JSON.stringify(publisher) });
   compose(['up', '-d', '--wait', '--wait-timeout', '180', '--scale', 'backend=2']);
-  test('stack', { E2E_BASE_URL: `http://${port('frontend', 8080)}`, E2E_PASSWORD: env.SITE_PASSWORD, E2E_BANK_PATH: dataPath,
+  test('stack', { E2E_BASE_URL: `http://${port('frontend', 8080)}`, E2E_PASSWORD: env.SITE_PASSWORD, E2E_ADMIN_PASSWORD: env.SUPERADMIN_PASSWORD, E2E_BANK_PATH: dataPath,
     E2E_IMPORT_SOURCE: importBundle, E2E_IMPORT_TOKEN: env.QUESTION_IMPORT_TOKEN });
   passed = true;
 } finally {

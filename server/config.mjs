@@ -35,6 +35,7 @@ export function loadConfig(overrides = {}) {
       reasoningEffort: e.VISION_REASONING_EFFORT || e.LLM_REASONING_EFFORT || '', maxTokens: Number(e.VISION_MAX_TOKENS || 8192),
       thinking: e.VISION_THINKING || e.LLM_THINKING || '' },
     sitePassword: e.SITE_PASSWORD || '',
+    adminPassword: e.SUPERADMIN_PASSWORD || '',
     jwtSecret: e.JWT_SECRET || '',
     jwtTtlSeconds: Number(e.JWT_TTL_DAYS || 30) * 86400,
     profileName: String(e.LEARNER_NAME || '备考同学').trim().slice(0, 32) || '备考同学',

@@ -10,6 +10,7 @@ import { ArrowUpRight, ArrowRight, ArrowLeft, Check, ChevronDown, ChevronRight, 
 import { api, savedMatch, saveMatch, savedSession, saveSession, streamMatch } from './api';
 import LearningHub, { LearnerLogin } from './LearningHub';
 import { CoachPanel, QuestionNotebook } from './StudyTools';
+import AdminPanel from './AdminPanel.jsx';
 
 const nf = new Intl.NumberFormat('zh-CN');
 const formatPercent = value => value === null || value === undefined ? '—' : `${value}%`;
@@ -246,6 +247,7 @@ export default function App() {
   const [loading, setLoading] = useState(true), [hubLoading, setHubLoading] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const [loginOpen, setLoginOpen] = useState(false), [expired, setExpired] = useState(false), [rulesOpen, setRulesOpen] = useState(false), [finishOpen, setFinishOpen] = useState(false), [image, setImage] = useState(null);
   const [connection, setConnection] = useState('connected');
+  const [loginRole, setLoginRole] = useState('learner');
   const hubRequest = useRef(0), filters = useRef({ wrong: {}, bookmarks: {} }), collectionRequests = useRef({}), pendingMatch = useRef(null);
   const pages = useRef({ history: 1, wrong: 1, bookmarks: 1 }), hubRevision = useRef(null);
   const liveMatch = useRef(match); liveMatch.current = match;
@@ -259,6 +261,7 @@ export default function App() {
     return `/api/learning/questions?${query}`;
   }
   async function refreshHub(account = learner, quiet = false) {
+    if (account?.role === 'admin') { setHubLoading(false); return; }
     const request = ++hubRequest.current;
     const filterKey = JSON.stringify(filters.current);
     for (const kind of ['history', 'wrong', 'bookmarks']) collectionRequests.current[kind] = (collectionRequests.current[kind] || 0) + 1;
@@ -330,6 +333,8 @@ export default function App() {
         catch (e) { if (e.status === 401) { saveSession(null); setExpired(true); } else throw e; }
       }
       await refreshHub(account);
+      if (account?.role === 'admin') return;
+      if (window.location.hash.startsWith('#admin')) { setLoginRole('admin'); setLoginOpen(true); }
       const route = window.location.hash.match(/^#(record|match)\/([a-f0-9-]+)$/);
       if (route?.[1] === 'record') await openRecord(route[2], account, false);
       else if (route?.[1] === 'match') await resume(route[2], account, false);
@@ -340,6 +345,7 @@ export default function App() {
   useEffect(() => { boot(); }, []);
   useEffect(() => {
     const expire = () => {
+      setLoginRole(savedSession()?.role === 'admin' ? 'admin' : 'learner');
       pendingMatch.current = match?.status === 'active' ? match.id : null;
       saveSession(null); setLearner(null); setCredentials(null); setMatch(null); setHub(null); setExpired(true); setLoginOpen(true); setBusy(false);
       refreshHub(null);
@@ -349,6 +355,7 @@ export default function App() {
   }, [match?.id]);
   useEffect(() => {
     const pop = async () => {
+      if (learner?.role === 'admin') return;
       const route = window.location.hash.match(/^#(record|match)\/([a-f0-9-]+)$/);
       const outgoing = liveMatch.current;
       if (outgoing?.status === 'active' && outgoing.settings.mode === 'practice' && route?.[2] !== outgoing.id) {
@@ -362,7 +369,7 @@ export default function App() {
     window.addEventListener('popstate', pop); return () => window.removeEventListener('popstate', pop);
   }, [learner]);
   useEffect(() => {
-    if (match || loading) return;
+    if (match || loading || learner?.role === 'admin') return;
     let stopped = false, polling = false;
     const refresh = async (force = false) => {
       if (document.hidden || polling || stopped) return;
@@ -398,8 +405,9 @@ export default function App() {
   async function login(password) {
     setBusy(true); setError('');
     try {
-      const session = await api('/api/login', { method: 'POST', body: { password } });
+      const session = await api('/api/login', { method: 'POST', body: { password, role: loginRole } });
       saveSession(session); setLearner(session); setLoginOpen(false); setExpired(false); await refreshHub(session);
+      if (session.role === 'admin') { pendingMatch.current = null; setMatch(null); setCredentials(null); window.history.replaceState(null, '', '#admin'); return; }
       if (pendingMatch.current) { const id = pendingMatch.current; pendingMatch.current = null; await resume(id, session); }
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }
@@ -441,16 +449,16 @@ export default function App() {
     catch (e) { setError(e.message); }
     finally { setBusy(false); }
   }
-  return <>{loading ? <div className="app-loading"><LoaderCircle size={30} className="spin" /><h2>小栗在整理自习室</h2><p>正在载入学习记录…</p></div> : !catalog ? <div className="app-loading"><WifiOff size={30} /><h2>暂时无法连接自习室</h2><p>{error}</p><button className="button primary" onClick={boot}>重新连接</button></div> : !match ?
+  return <>{loading ? <div className="app-loading"><LoaderCircle size={30} className="spin" /><h2>小栗在整理自习室</h2><p>正在载入学习记录…</p></div> : !catalog ? <div className="app-loading"><WifiOff size={30} /><h2>暂时无法连接自习室</h2><p>{error}</p><button className="button primary" onClick={boot}>重新连接</button></div> : learner?.role === 'admin' ? <AdminPanel onLogout={logout} /> : !match ?
     <LearningHub key={learner ? 'learner' : 'guest'} learner={learner} data={hub || {}} catalog={catalog} loading={hubLoading} busy={busy} error={error}
-      onLogin={() => { setError(''); setLoginOpen(true); }} onLogout={logout} onStart={start} onResume={resume} onReview={openRecord} onImage={setImage}
+      onLogin={() => { setError(''); setLoginRole('learner'); setLoginOpen(true); }} onAdminLogin={() => { setError(''); setLoginRole('admin'); setLoginOpen(true); }} onLogout={logout} onStart={start} onResume={resume} onReview={openRecord} onImage={setImage}
       onBookmark={(id, bookmarked) => annotate(id, { bookmarked })} onMaster={(id, mastered) => annotate(id, { mastered })}
       onRefresh={() => { setError(''); refreshHub(); }} onLoadMore={kind => loadCollection(kind, true)} onNotebookFilter={(kind, nextFilters) => loadCollection(kind, false, nextFilters)}
       onAvailability={settings => api('/api/learning/availability', { method: 'POST', body: settings })}
       onSaveProfile={async patch => { setBusy(true); try { const profile = await api('/api/learning/profile', { method: 'PATCH', body: patch }); await refreshHub(); return profile; } finally { setBusy(false); } }} />
     : <><Header match={match} onHome={home} onRules={() => setRulesOpen(true)} onFinish={() => setFinishOpen(true)} providers={catalog.providers} readOnly={readOnly} />
       {match.status === 'finished' ? <Report match={match} onRestart={home} onImage={setImage} readOnly={readOnly} /> : <Arena match={match} onAction={action} busy={busy} error={error} onImage={setImage} connection={connection} />}</>}
-    {loginOpen && <LearnerLogin onLogin={login} onClose={() => { setLoginOpen(false); setError(''); }} busy={busy} error={error} expired={expired} />}
+    {loginOpen && <LearnerLogin key={loginRole} role={loginRole} onLogin={login} onClose={() => { setLoginOpen(false); setError(''); }} busy={busy} error={error} expired={expired} />}
     {rulesOpen && <Rules onClose={() => setRulesOpen(false)} />}
     {finishOpen && <Dialog title={match?.settings.mode === 'practice' ? '结束这次练习？' : '结束这场对决？'} onClose={() => setFinishOpen(false)}><p className="dialog-copy">已完成的 <strong>{match?.scores.completed || 0}</strong> 道题会生成练习报告。{match?.current?.phase !== 'revealed' && '当前未揭晓的题目不计入成绩。'}如果只是暂时离开，可以直接返回学习中心保留进度。</p><div className="dialog-actions"><button className="button ghost" onClick={() => setFinishOpen(false)}>继续练习</button><button className="button primary" disabled={busy} onClick={async () => { await action('finish'); setFinishOpen(false); }}>结束并查看报告 <ArrowRight size={17} /></button></div></Dialog>}
     {image && <Dialog title="题图预览" onClose={() => setImage(null)} className="image-dialog"><div className="zoom-image"><img src={image} alt="放大的题目图片" /></div><p className="image-caption">原始题图 · 可横向滚动查看细节</p></Dialog>}

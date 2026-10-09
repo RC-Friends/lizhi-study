@@ -19,14 +19,15 @@ function backgroundValidation(data) {
     worker.once('exit', code => { clean(); if (code !== 0) reject(new HttpError(503, '题库校验中断。', 'validation_unavailable')); });
   });
 }
-export function questionImportRouter(bank, config, { limit, runtime }) {
+export function questionImportRouter(bank, config, { limit, runtime, auth }) {
   const router = express.Router(), settings = config.questionImport || {}, secret = settings.token || '';
-  if (secret && (Buffer.byteLength(secret) < 32 || secret === config.sitePassword || secret === config.jwtSecret)) throw new Error('QUESTION_IMPORT_TOKEN 需要独立的至少 32 字节随机值，不能复用登录口令或 JWT 密钥。');
+  if (secret && (Buffer.byteLength(secret) < 32 || secret === config.sitePassword || secret === config.adminPassword || secret === config.jwtSecret)) throw new Error('QUESTION_IMPORT_TOKEN 需要独立的至少 32 字节随机值，不能复用登录口令或 JWT 密钥。');
   let active = 0;
   router.use(async (req, res, next) => {
-    if (!secret) throw new HttpError(404, '题库管理接口未启用。', 'import_disabled');
+    if (!secret && !auth?.adminEnabled) throw new HttpError(404, '题库管理接口未启用。', 'import_disabled');
     const candidate = req.get('Authorization')?.match(/^Bearer ([^\s]+)$/)?.[1] || '';
-    if (!crypto.timingSafeEqual(crypto.createHash('sha256').update(candidate).digest(), crypto.createHash('sha256').update(secret).digest())) {
+    const admin = auth?.verify(candidate)?.role === 'admin';
+    if (!admin && (!secret || !crypto.timingSafeEqual(crypto.createHash('sha256').update(candidate).digest(), crypto.createHash('sha256').update(secret).digest()))) {
       await limit(`import-login:${req.ip}`, 12, 60000);
       throw new HttpError(401, '需要独立的题库管理令牌。', 'import_unauthorized');
     }

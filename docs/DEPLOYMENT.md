@@ -12,7 +12,7 @@ npm run stack:prepare -- --bundle=artifacts/resources-v1
 
 生成 `.env.stack`、`deploy/local/seaweedfs-s3.json` 与 `deploy/local/seaweedfs-publisher.json`，权限为 0600。前两者供容器启动使用，发布凭证只用于上传，不传入正常运行的后端。已有文件不会覆盖。
 
-按需编辑 `.env.stack` 的 `SITE_PASSWORD`、`APP_BIND`、`APP_PORT`、模型设置及 `PUBLIC_URL`，然后：
+按需编辑 `.env.stack` 的 `SITE_PASSWORD`、`SUPERADMIN_PASSWORD`、`APP_BIND`、`APP_PORT`、首次初始化的模型设置及 `PUBLIC_URL`，然后：
 
 ```bash
 docker compose --env-file .env.stack build
@@ -89,7 +89,9 @@ SeaweedFS 使用 headless Service，单容器 `weed mini` 可通过 Pod 地址�
 
 日常新增题目使用 [标准导入与在线发布 API](QUESTION_IMPORT.md)：工具基于当前资源包增量合并，发布完整版本后原子更新数据库中的版本指针。所有副本在事务内核对版本，缓存随版本更新，实例重启也使用数据库中的当前版本。已有题目不能删除或修改，进行中的试卷保持原样。
 
-`QUESTION_RESOURCE_VERSION` 只用于初始化数据库或无数据库的本地模式。已有数据库的在线版本不会被旧环境变量覆盖。导入 API 默认关闭，启用需要独立管理令牌及 S3 发布身份；日常读题仍使用只读身份。旧对象版本和备份应保留。迁移到这套机制时，先统一升级后端，避免旧版副本不认识数据库版本指针。
+`QUESTION_RESOURCE_VERSION` 只用于初始化数据库或无数据库的本地模式。已有数据库的在线版本不会被旧环境变量覆盖。题库管理接口接受独立管理令牌或超级管理员 JWT；两者都未配置时关闭。发布还需要独立 S3 发布身份，日常读题仍使用只读身份。旧对象版本和备份应保留。迁移到这套机制时，先统一升级后端，避免旧版副本不认识数据库版本指针。
+
+模型配置也采用首次初始化机制：空数据库从 `LLM_*`、`JEV_*`、`VISION_*` 导入，后续以 PostgreSQL 中的配置为准。完成所有后端副本升级后，通过 [超级管理员面板](ADMINISTRATION.md) 修改。Kubernetes 仍从应用 Secret 注入启动口令和基础设施凭证，模型设置无需再通过修改 Secret 和重启 Pod 来更新。
 
 ## 旧记录迁移
 

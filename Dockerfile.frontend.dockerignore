@@ -22,5 +22,8 @@
 
 !schema/
 !schema/**
+!examples/
+!examples/question-bank/
+!examples/question-bank/questions.json
 !scripts/import-questions.mjs
 !scripts/publish-question-import.mjs

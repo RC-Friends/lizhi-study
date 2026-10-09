@@ -7,6 +7,7 @@ import { QuestionBank } from '../../server/bank.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { execFileSync } from 'node:child_process';
 import { checkObserverSkill } from './observer-e2e.mjs';
+import { checkAdministration } from './admin-e2e.mjs';
 
 const base=process.env.E2E_BASE_URL, password=process.env.E2E_PASSWORD;
 if(!base || !['127.0.0.1','localhost'].includes(new URL(base).hostname) || !password) throw new Error('Use E2E_BASE_URL pointing to an isolated loopback stack and its E2E_PASSWORD.');
@@ -76,5 +77,6 @@ try{
   await screenshot(mobile,'mobile-live-import');checks.push('operator CLI uploads through Nginx; active study UI refreshes catalog and availability without reload or backend restart');
  }
  await checkObserverSkill({browser,base,screenshot});checks.push('guest skill navigation, public HTTPS origin binding, real clipboard and Markdown/ZIP downloads, anonymous statistics, retry and 390px layout');
+ if(process.env.E2E_ADMIN_PASSWORD){ await checkAdministration({browser,base,adminPassword:process.env.E2E_ADMIN_PASSWORD,learnerPassword:password,screenshot});checks.push('administrator session and role separation, model configuration persistence, Word import and deduplication, learner shared library, desktop/mobile admin UI'); }
  assert.deepEqual(errors,[]);assert.deepEqual(failed,[]);await fs.writeFile('test-results/stack-results.json',JSON.stringify({passed:true,checks,pageErrors:errors,failedRequests:failed,paidModelCalls:0},null,2));console.log(JSON.stringify({passed:true,checks,pageErrors:errors,failedRequests:failed}));
 }catch(error){await page?.screenshot({path:'test-results/stack-failure.png',fullPage:true}).catch(()=>{});await fs.writeFile('test-results/stack-failure.json',JSON.stringify({error:error.message,errors,failed},null,2));throw error;}finally{await browser.close();}

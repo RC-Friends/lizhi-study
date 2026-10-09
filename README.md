@@ -35,7 +35,7 @@ npm run resources:pack -- --output=artifacts/resources-v1
 npm run stack:prepare -- --bundle=artifacts/resources-v1
 ```
 
-`stack:prepare` 生成随机登录口令、JWT 签名密钥、数据库与 Redis 密码，以及分开的 S3 读取/发布凭证。登录口令在 `.env.stack` 的 `SITE_PASSWORD`；可在首次启动前修改。已有配置不会被覆盖。
+`stack:prepare` 生成独立的考生口令、超级管理员口令、JWT 签名密钥、数据库与 Redis 密码，以及分开的 S3 读取/发布凭证。两个登录口令分别在 `.env.stack` 的 `SITE_PASSWORD` 和 `SUPERADMIN_PASSWORD`；已有配置不会被覆盖。
 
 ```bash
 docker compose --env-file .env.stack build
@@ -60,9 +60,10 @@ docker compose --env-file .env.stack up -d --wait --scale backend=2
 - [题库 JSON Schema](schema/question.schema.json)、[来源与许可说明](docs/DATA_SOURCES.md)
 - [标准题库导入、图片范例与在线发布 API](docs/QUESTION_IMPORT.md)
 - [游客 AI 监督技能、网页下载与公开统计](docs/OBSERVER_SKILL.md)
+- [单考生模式、超级管理员面板与模型配置初始化](docs/ADMINISTRATION.md)
 - [自动化验收与版本发布](docs/RELEASING.md)、[更新日志](CHANGELOG.md)
 
-在 `.env.stack` 中配置 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL`。确认模型支持图像输入后再设置 `LLM_VISION=true`。不配置模型也能使用自主练习和明确标记的演示对战。模型密钥仅由后端读取。
+首次启动前，可在 `.env.stack` 中填写 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL` 等模型设置，后端只在数据库尚未初始化模型配置时导入一次。此后从页脚「站点管理」登录，统一编辑通用 LLM、JEV 和视觉助手；对战、陪练、知识库出题都读取数据库配置。重启或修改旧环境变量不会覆盖面板中的设置。不配置模型也能自主练习和使用演示对战。
 
 ## 开发与验证
 

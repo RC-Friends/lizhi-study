@@ -6,7 +6,8 @@ import { HttpError } from './bank.mjs';
 import { createAuth } from './auth.mjs';
 import { LearningService } from './learning.mjs';
 import { KnowledgeService } from './knowledge.mjs';
-import { DraftService } from './question-drafts.mjs';
+import { DraftService, completeDraft } from './question-drafts.mjs';
+import { runKnowledge } from './knowledge-runtime.mjs';
 import { AiConfigService } from './ai-config.mjs';
 import { CoachService } from './coach.mjs';
 import { ProviderError } from './providers.mjs';
@@ -19,7 +20,7 @@ export function createApp(bank, service, config, options = {}) {
   const app = express(), auth = createAuth(config);
   const learning = options.learning || new LearningService(bank, service, config, { persist: service.persist });
   const knowledge = options.knowledge || new KnowledgeService(config, { storage: service.storage, persist: service.persist });
-  const aiConfig = options.aiConfig || new AiConfigService(config, { storage: service.storage, persist: service.persist });
+  const aiConfig = options.aiConfig || new AiConfigService(options.runtime ? { ...config, llm: {}, jev: {}, vision: {} } : config, { storage: service.storage, persist: service.persist });
   const drafts = options.drafts || new DraftService(config, { storage: service.storage, persist: service.persist, llmResolver: () => aiConfig.effectiveLlm() });
   const coach = options.coach || new CoachService(bank, service, config);
   service.storage?.onFailure(() => coach.shutdown());
@@ -43,7 +44,10 @@ export function createApp(bank, service, config, options = {}) {
   });
   const runtime = options.runtime;
   const local = { service, learning, coach, knowledge, drafts, aiConfig };
-  const run = (work, options) => runtime ? runtime.run(work, options) : Promise.resolve().then(() => work(local)).then(async value => { await service.flush(); return value; });
+  const run = (work, options) => runtime ? runtime.run(work, options) : Promise.resolve().then(() => {
+    service.config = aiConfig.effectiveConfig(); coach.config = service.config;
+    return work(local);
+  }).then(async value => { await service.flush(); return value; });
   const buckets = new Map();
   async function limit(key, count, windowMs) {
     if (runtime) return runtime.limit(key, count, windowMs);
@@ -57,12 +61,13 @@ export function createApp(bank, service, config, options = {}) {
   const token = req => req.get('Authorization')?.match(/^Bearer ([^\s]+)$/)?.[1];
   // Authenticate administrators before buffering large imports. Learner JWTs
   // cannot access this router; normal study requests retain their small limit.
-  app.use('/api/admin/question-bank', questionImportRouter(bank, config, { limit, runtime }));
+  app.use('/api/admin/question-bank', questionImportRouter(bank, config, { limit, runtime, auth }));
   // Knowledge uploads carry whole PDF/Word files as base64; parsed before the
   // small global JSON limit so ordinary study requests stay cheap.
   app.use((req, res, next) => {
     if (req.method === 'POST' && /^\/api\/kb\/libraries\/[^/]+\/documents$/.test(req.path)) {
-      return express.json({ limit: '12mb' })(req, res, next);
+      try { auth.requireToken(token(req)); } catch (error) { return next(error); }
+      return express.json({ limit: '28mb', inflate: false })(req, res, next);
     }
     next();
   });
@@ -98,12 +103,14 @@ export function createApp(bank, service, config, options = {}) {
   });
   app.post('/api/login', async (req, res) => {
     await limit(`login:${req.ip}`, 12, 60000);
-    const session = auth.login(req.body?.password);
+    const session = auth.login(req.body?.password, req.body?.role || 'learner');
+    if (session.role === 'admin') return res.json(session);
     res.json(await run(({ learning }) => ({ ...session, profile: { ...session.profile, name: learning.profile(session.profile.id).nickname } })));
   });
   app.get('/api/catalog', async (_req, res) => {
-    const info = runtime ? await runtime.withQuestions(({ bank, version }) => ({ bank: bank.catalog(), resourceVersion: version })) : { bank: bank.catalog() };
-    res.json({ ...info, providers: providerCatalog(config), coach: { name: '小栗', ready: Boolean(config.llm.key && config.llm.model) } });
+    const catalog = (bank, configuration, version) => ({ bank: bank.catalog(), resourceVersion: version, providers: providerCatalog(configuration),
+      coach: { name: '小栗', ready: Boolean(configuration.llm.key && configuration.llm.model && configuration.llm.baseUrl) } });
+    res.json(runtime ? await runtime.withQuestions(({ bank, config, version }) => catalog(bank, config, version)) : catalog(bank, aiConfig.effectiveConfig(), config.resourceVersion));
   });
   app.get('/api/public/revision', async (_req, res) => res.json({ dataRevision: runtime ? await runtime.revision() : null }));
   app.get('/api/public/stats', async (req, res) => {
@@ -121,7 +128,30 @@ export function createApp(bank, service, config, options = {}) {
   app.use('/api', (req, _res, next) => {
     try { req.viewer = auth.requireToken(token(req)); next(); } catch (error) { next(error); }
   });
-  app.get('/api/session', route((req, { learning }) => ({ ...auth.publicSession(req.viewer), profile: { id: req.viewer.sub, name: learning.profile(req.viewer.sub).nickname } })));
+  const requireAdmin = (req, _res, next) => {
+    try { auth.requireAdmin(token(req)); next(); } catch (error) { next(error); }
+  };
+  const requireLearner = (req, _res, next) => req.viewer.role === 'learner' ? next() : next(new HttpError(403, '请切换到考生身份进行练习。', 'learner_required'));
+  app.get('/api/session', async (req, res) => {
+    if (req.viewer.role === 'admin') return res.json(auth.publicSession(req.viewer));
+    res.json(await run(({ learning }) => ({ ...auth.publicSession(req.viewer), profile: { id: req.viewer.sub, name: learning.profile(req.viewer.sub).nickname } }), { readOnly: true }));
+  });
+  app.use('/api/admin', requireAdmin);
+  app.use('/api/ai/config', requireAdmin);
+  app.use('/api/learning', requireLearner);
+  app.use('/api/matches', requireLearner);
+  const runKb = (work, options = {}) => runtime ? runKnowledge(runtime, config, work, options) : run(work);
+  const kbRoute = (handler, readOnly = false) => async (req, res) => res.json(await runKb(ctx => handler(req, ctx), { readOnly }));
+  app.get('/api/admin/status', async (_req, res) => {
+    const services = {};
+    try { await runtime?.health(); if (service.storage) await service.storage.health(); services.database = runtime || service.storage ? 'ready' : 'local'; services.redis = runtime ? 'ready' : 'local'; }
+    catch { services.database = 'unavailable'; services.redis = 'unavailable'; }
+    let info;
+    try { info = runtime ? await runtime.withQuestions(({ bank, version }) => ({ bank: bank.catalog(), resourceVersion: version })) : { bank: bank.catalog(), resourceVersion: config.resourceVersion || null }; services.resources = 'ready'; }
+    catch { services.resources = 'unavailable'; info = { bank: null, resourceVersion: null }; }
+    const knowledge = await runKb(({ knowledge }) => ({ libraries: knowledge.libraries.size, documents: knowledge.documents.size }), { readOnly: true });
+    res.json({ ...info, services, knowledge, mode: 'single-learner', importer: { validation: true, publishing: Boolean(runtime?.resourceManager && config.questionImport?.accessKey && config.questionImport?.secretKey) } });
+  });
   app.get('/api/learning/overview', route((req, { learning }) => overview(req, learning), { cache: true }));
   app.get('/api/learning/dashboard', route((req, { learning }) => learning.dashboard(req.viewer.sub), { cache: true }));
   app.get('/api/learning/history', route((req, { learning }) => learning.history({ ownerId: req.viewer.sub, page: req.query.page || 1, pageSize: req.query.pageSize || 20 }), { cache: true }));
@@ -132,47 +162,42 @@ export function createApp(bank, service, config, options = {}) {
   app.patch('/api/learning/questions/:id', route((req, { learning }) => learning.updateQuestion(req.params.id, req.body, req.viewer.sub)));
   app.patch('/api/learning/profile', route((req, { learning }) => learning.updateProfile(req.body, req.viewer.sub)));
   app.post('/api/learning/availability', route((req, { learning }) => learning.availability(req.body || {}, req.viewer.sub)));
-  app.get('/api/kb/libraries', route((req, { knowledge }) => knowledge.listLibraries(req.query.scope || 'mine', req.viewer.sub)));
+  // Both fixed identities manage the same learner's library. No second learner
+  // profile is created when an administrator organizes study material.
+  app.get('/api/kb/libraries', kbRoute((_req, { knowledge }) => knowledge.listLibraries('mine', 'primary'), true));
   app.post('/api/kb/libraries', async (req, res) => {
     await limit(`kb:${req.viewer.sub}`, 30, 60000);
-    res.status(201).json(await run(({ knowledge }) => knowledge.createLibrary(req.body || {}, req.viewer.sub)));
+    res.status(201).json(await runKb(({ knowledge }) => knowledge.createLibrary({ ...req.body, visibility: 'private' }, 'primary')));
   });
-  app.patch('/api/kb/libraries/:id', route((req, { knowledge }) => knowledge.updateLibrary(req.params.id, req.body || {}, req.viewer.sub)));
-  app.delete('/api/kb/libraries/:id', route((req, { knowledge }) => knowledge.removeLibrary(req.params.id, req.viewer.sub)));
-  app.get('/api/kb/libraries/:id', route((req, { knowledge }) => knowledge.listDocuments(req.params.id, req.viewer.sub)));
-  app.get('/api/kb/libraries/:id/export', route((req, { knowledge }) => knowledge.exportLibrary(req.params.id, req.viewer.sub)));
+  app.patch('/api/kb/libraries/:id', kbRoute((req, { knowledge }) => knowledge.updateLibrary(req.params.id, { ...req.body, visibility: 'private' }, 'primary')));
+  app.delete('/api/kb/libraries/:id', kbRoute((req, { knowledge }) => knowledge.removeLibrary(req.params.id, 'primary')));
+  app.get('/api/kb/libraries/:id', kbRoute((req, { knowledge }) => knowledge.listDocuments(req.params.id, 'primary'), true));
+  app.get('/api/kb/libraries/:id/export', kbRoute((req, { knowledge }) => knowledge.exportLibrary(req.params.id, 'primary'), true));
   app.post('/api/kb/libraries/:id/documents', async (req, res) => {
     await limit(`kb:${req.viewer.sub}`, 30, 60000);
-    res.status(201).json(await run(({ knowledge }) => knowledge.upload({ ...req.body, libraryId: req.params.id }, req.viewer.sub)));
+    res.status(201).json(await runKb(({ knowledge }) => knowledge.upload({ ...req.body, libraryId: req.params.id }, 'primary')));
   });
-  app.get('/api/kb/libraries/:id/documents/:docId', route((req, { knowledge }) => knowledge.getDocument(req.params.id, req.params.docId, req.viewer.sub)));
-  app.delete('/api/kb/libraries/:id/documents/:docId', route((req, { knowledge }) => knowledge.removeDocument(req.params.id, req.params.docId, req.viewer.sub)));
-  app.get('/api/kb/search', route((req, { knowledge }) => knowledge.searchChunks(String(req.query.q || ''), { limit: Number(req.query.limit) || 5, ownerId: req.viewer.sub })));
-  app.post('/api/kb/generate', async (req, res) => {
-    await limit(`kbgen:${req.viewer.sub}`, 10, 60000);
-    res.json(await run(({ drafts, knowledge }) => drafts.generate(req.body || {}, knowledge, req.viewer.sub)));
+  app.get('/api/kb/libraries/:id/documents/:docId', kbRoute((req, { knowledge }) => knowledge.getDocument(req.params.id, req.params.docId, 'primary'), true));
+  app.delete('/api/kb/libraries/:id/documents/:docId', kbRoute((req, { knowledge }) => knowledge.removeDocument(req.params.id, req.params.docId, 'primary')));
+  app.get('/api/kb/search', kbRoute((req, { knowledge }) => knowledge.searchChunks(String(req.query.q || ''), { limit: Number(req.query.limit) || 5, ownerId: 'primary' }), true));
+  app.post('/api/kb/generate', requireLearner, async (req, res) => {
+    await limit('kbgen:primary', 10, 60000);
+    if (!runtime) return res.json(await runKb(({ drafts, knowledge }) => drafts.generate(req.body || {}, knowledge, 'primary')));
+    const prepared = await runKb(({ drafts, knowledge }) => drafts.prepare(req.body || {}, knowledge, 'primary'), { readOnly: true });
+    const text = await completeDraft(prepared.llm, prepared.messages);
+    res.json(await runKb(({ drafts }) => drafts.accept(prepared, text)));
   });
-  app.get('/api/drafts', route((req, { drafts }) => drafts.list({ status: req.query.status || 'draft' })));
-  app.post('/api/drafts/:id/confirm', route((req, { drafts }) => drafts.confirm(req.params.id)));
-  app.delete('/api/drafts/:id', route((req, { drafts }) => drafts.remove(req.params.id)));
-  app.get('/api/drafts/export', route((req, { drafts }) => drafts.export()));
-  app.post('/api/drafts/:id/swap', route((req, { drafts }) => drafts.markSwapped(req.params.id)));
-  app.get('/api/ai/config', route((req, { aiConfig }) => aiConfig.masked()));
-  app.put('/api/ai/config', route((req, { aiConfig }) => aiConfig.update(req.body || {})));
+  app.get('/api/drafts', kbRoute((req, { drafts }) => drafts.list({ status: req.query.status || 'draft' }), true));
+  app.post('/api/drafts/:id/confirm', kbRoute((req, { drafts }) => drafts.confirm(req.params.id)));
+  app.delete('/api/drafts/:id', kbRoute((req, { drafts }) => drafts.remove(req.params.id)));
+  app.get('/api/drafts/export', kbRoute((_req, { drafts }) => drafts.export(), true));
+  app.post('/api/drafts/:id/swap', kbRoute((req, { drafts }) => drafts.markSwapped(req.params.id)));
+  app.get('/api/ai/config', async (_req, res) => res.json(await runKb(({ aiConfig }) => aiConfig.masked(), { readOnly: true, configurationOnly: true })));
+  app.put('/api/ai/config', async (req, res) => res.json(await runKb(({ aiConfig }) => aiConfig.update(req.body || {}), { configurationOnly: true })));
   app.post('/api/ai/config/test', async (req, res) => {
-    await limit('aitest:' + req.viewer.sub, 6, 60000);
-    res.json(await run(({ aiConfig }) => aiConfig.test(req.body || {})));
-  });
-  app.get('/api/drafts', route((req, { drafts }) => drafts.list({ status: req.query.status || 'draft' })));
-  app.post('/api/drafts/:id/confirm', route((req, { drafts }) => drafts.confirm(req.params.id)));
-  app.delete('/api/drafts/:id', route((req, { drafts }) => drafts.remove(req.params.id)));
-  app.get('/api/drafts/export', route((req, { drafts }) => drafts.export()));
-  app.post('/api/drafts/:id/swap', route((req, { drafts }) => drafts.markSwapped(req.params.id)));
-  app.get('/api/ai/config', route((req, { aiConfig }) => aiConfig.masked()));
-  app.put('/api/ai/config', route((req, { aiConfig }) => aiConfig.update(req.body || {})));
-  app.post('/api/ai/config/test', async (req, res) => {
-    await limit('aitest:' + req.viewer.sub, 6, 60000);
-    res.json(await run(({ aiConfig }) => aiConfig.test(req.body || {})));
+    await limit('aitest:admin', 6, 60000);
+    const aiConfig = await runKb(({ aiConfig }) => aiConfig, { readOnly: true, configurationOnly: true });
+    res.json(await aiConfig.test(req.body || {}));
   });
   app.post('/api/matches', async (req, res) => {
     await limit(`create:${req.viewer.sub}`, 30, 600000);
