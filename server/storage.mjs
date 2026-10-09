@@ -1,4 +1,6 @@
 import pg from 'pg';
+import { validateKnowledge, validateLibrary } from './knowledge.mjs';
+import { validateDraft } from './question-drafts.mjs';
 
 export class StorageError extends Error {
   constructor(message = '数据库暂时不可用，请稍后重试。', code = 'storage_unavailable') {
@@ -22,6 +24,21 @@ CREATE TABLE IF NOT EXISTS study_annotations (
 );
 CREATE TABLE IF NOT EXISTS study_imports (
   fingerprint text PRIMARY KEY, counts jsonb NOT NULL, imported_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS study_kb_libraries (
+  id text PRIMARY KEY, owner_id text NOT NULL, payload jsonb NOT NULL
+);
+CREATE TABLE IF NOT EXISTS study_kb_documents (
+  id text PRIMARY KEY, library_id text, sha256 text NOT NULL, uploaded_at timestamptz NOT NULL DEFAULT now(), payload jsonb NOT NULL
+);
+CREATE INDEX IF NOT EXISTS study_kb_documents_sha ON study_kb_documents(sha256);
+CREATE INDEX IF NOT EXISTS study_kb_documents_library ON study_kb_documents(library_id);
+ALTER TABLE study_kb_documents ADD COLUMN IF NOT EXISTS library_id text;
+CREATE TABLE IF NOT EXISTS study_ai_config (
+  id text PRIMARY KEY, payload jsonb NOT NULL
+);
+CREATE TABLE IF NOT EXISTS study_kb_drafts (
+  id text PRIMARY KEY, status text NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), payload jsonb NOT NULL
 );
 INSERT INTO study_schema_migrations(version) VALUES (1) ON CONFLICT DO NOTHING;
 `;
@@ -90,6 +107,10 @@ export class PostgresStore {
       store.learning = { version: 1, profiles: Object.fromEntries(profiles.map(row => [row.owner_id, row.payload])), questions: {} };
       for (const row of annotations) (store.learning.questions[row.owner_id] ||= {})[row.question_id] = row.payload;
       validateLearning(store.learning, bank);
+      store.kbLibraries = (await store.client.query('SELECT payload FROM study_kb_libraries ORDER BY payload->>\'createdAt\', id')).rows.map(row => validateLibrary(row.payload));
+      store.kb = (await store.client.query('SELECT payload FROM study_kb_documents ORDER BY uploaded_at, id')).rows.map(row => validateKnowledge(row.payload));
+      store.aiConfig = (await store.client.query("SELECT payload FROM study_ai_config WHERE id='platform'")).rows.map(row => row.payload);
+      store.kbDrafts = (await store.client.query('SELECT payload FROM study_kb_drafts ORDER BY created_at, id')).rows.map(row => validateDraft(row.payload));
       return store;
     } catch (error) {
       await store.close();
@@ -143,6 +164,32 @@ export class PostgresStore {
     const payload = JSON.stringify(annotation);
     this.enqueue(client => client.query(`INSERT INTO study_annotations(owner_id, question_id, payload) VALUES ($1, $2, $3::jsonb)
       ON CONFLICT (owner_id, question_id) DO UPDATE SET payload=EXCLUDED.payload`, [ownerId, questionId, payload]));
+  }
+  saveKbLibrary(library) {
+    this.enqueue(client => client.query(`INSERT INTO study_kb_libraries(id, owner_id, payload) VALUES ($1, $2, $3::jsonb)
+      ON CONFLICT (id) DO UPDATE SET payload=EXCLUDED.payload`, [library.id, library.ownerId, JSON.stringify(library)]));
+  }
+  deleteKbLibrary(id) {
+    this.enqueue(client => client.query('DELETE FROM study_kb_libraries WHERE id=$1', [id]));
+  }
+  saveKbDocument(document) {
+    this.enqueue(client => client.query(`INSERT INTO study_kb_documents(id, library_id, sha256, uploaded_at, payload) VALUES ($1, $2, $3, $4, $5::jsonb)
+      ON CONFLICT (id) DO UPDATE SET library_id=EXCLUDED.library_id, payload=EXCLUDED.payload`,
+      [document.id, document.libraryId, document.sha256, document.uploadedAt, JSON.stringify(document)]));
+  }
+  deleteKbDocument(id) {
+    this.enqueue(client => client.query('DELETE FROM study_kb_documents WHERE id=$1', [id]));
+  }
+  saveAiConfig(entry) {
+    this.enqueue(client => client.query(`INSERT INTO study_ai_config(id, payload) VALUES ('platform', $1::jsonb)
+      ON CONFLICT (id) DO UPDATE SET payload=EXCLUDED.payload`, [JSON.stringify(entry.value)]));
+  }
+  saveKbDraft(draft) {
+    this.enqueue(client => client.query(`INSERT INTO study_kb_drafts(id, status, created_at, payload) VALUES ($1, $2, $3, $4::jsonb)
+      ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, payload=EXCLUDED.payload`, [draft.id, draft.status, draft.createdAt, JSON.stringify(draft)]));
+  }
+  deleteKbDraft(id) {
+    this.enqueue(client => client.query('DELETE FROM study_kb_drafts WHERE id=$1', [id]));
   }
   async importLegacy({ fingerprint, matches, learning }) {
     await this.flush();

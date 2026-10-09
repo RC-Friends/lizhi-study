@@ -5,6 +5,9 @@ import { ROOT, providerCatalog } from './config.mjs';
 import { HttpError } from './bank.mjs';
 import { createAuth } from './auth.mjs';
 import { LearningService } from './learning.mjs';
+import { KnowledgeService } from './knowledge.mjs';
+import { DraftService } from './question-drafts.mjs';
+import { AiConfigService } from './ai-config.mjs';
 import { CoachService } from './coach.mjs';
 import { ProviderError } from './providers.mjs';
 import { defaultImagesPath } from './resources.mjs';
@@ -15,9 +18,12 @@ import { publicStats, publicStatsQuery } from './public-stats.mjs';
 export function createApp(bank, service, config, options = {}) {
   const app = express(), auth = createAuth(config);
   const learning = options.learning || new LearningService(bank, service, config, { persist: service.persist });
+  const knowledge = options.knowledge || new KnowledgeService(config, { storage: service.storage, persist: service.persist });
+  const aiConfig = options.aiConfig || new AiConfigService(config, { storage: service.storage, persist: service.persist });
+  const drafts = options.drafts || new DraftService(config, { storage: service.storage, persist: service.persist, llmResolver: () => aiConfig.effectiveLlm() });
   const coach = options.coach || new CoachService(bank, service, config);
   service.storage?.onFailure(() => coach.shutdown());
-  app.locals.learning = learning; app.locals.coach = coach;
+  app.locals.learning = learning; app.locals.coach = coach; app.locals.knowledge = knowledge; app.locals.drafts = drafts; app.locals.aiConfig = aiConfig;
   app.disable('x-powered-by');
   if (config.trustProxy) app.set('trust proxy', config.trustProxy);
   app.use((req, res, next) => {
@@ -36,7 +42,7 @@ export function createApp(bank, service, config, options = {}) {
     next();
   });
   const runtime = options.runtime;
-  const local = { service, learning, coach };
+  const local = { service, learning, coach, knowledge, drafts, aiConfig };
   const run = (work, options) => runtime ? runtime.run(work, options) : Promise.resolve().then(() => work(local)).then(async value => { await service.flush(); return value; });
   const buckets = new Map();
   async function limit(key, count, windowMs) {
@@ -52,6 +58,14 @@ export function createApp(bank, service, config, options = {}) {
   // Authenticate administrators before buffering large imports. Learner JWTs
   // cannot access this router; normal study requests retain their small limit.
   app.use('/api/admin/question-bank', questionImportRouter(bank, config, { limit, runtime }));
+  // Knowledge uploads carry whole PDF/Word files as base64; parsed before the
+  // small global JSON limit so ordinary study requests stay cheap.
+  app.use((req, res, next) => {
+    if (req.method === 'POST' && /^\/api\/kb\/libraries\/[^/]+\/documents$/.test(req.path)) {
+      return express.json({ limit: '12mb' })(req, res, next);
+    }
+    next();
+  });
   app.use(express.json({ limit: '24kb' }));
   const route = (handler, { readOnly = false, match = false, cache = false } = {}) => async (req, res) => {
     const work = ctx => handler(req, ctx);
@@ -118,6 +132,48 @@ export function createApp(bank, service, config, options = {}) {
   app.patch('/api/learning/questions/:id', route((req, { learning }) => learning.updateQuestion(req.params.id, req.body, req.viewer.sub)));
   app.patch('/api/learning/profile', route((req, { learning }) => learning.updateProfile(req.body, req.viewer.sub)));
   app.post('/api/learning/availability', route((req, { learning }) => learning.availability(req.body || {}, req.viewer.sub)));
+  app.get('/api/kb/libraries', route((req, { knowledge }) => knowledge.listLibraries(req.query.scope || 'mine', req.viewer.sub)));
+  app.post('/api/kb/libraries', async (req, res) => {
+    await limit(`kb:${req.viewer.sub}`, 30, 60000);
+    res.status(201).json(await run(({ knowledge }) => knowledge.createLibrary(req.body || {}, req.viewer.sub)));
+  });
+  app.patch('/api/kb/libraries/:id', route((req, { knowledge }) => knowledge.updateLibrary(req.params.id, req.body || {}, req.viewer.sub)));
+  app.delete('/api/kb/libraries/:id', route((req, { knowledge }) => knowledge.removeLibrary(req.params.id, req.viewer.sub)));
+  app.get('/api/kb/libraries/:id', route((req, { knowledge }) => knowledge.listDocuments(req.params.id, req.viewer.sub)));
+  app.get('/api/kb/libraries/:id/export', route((req, { knowledge }) => knowledge.exportLibrary(req.params.id, req.viewer.sub)));
+  app.post('/api/kb/libraries/:id/documents', async (req, res) => {
+    await limit(`kb:${req.viewer.sub}`, 30, 60000);
+    res.status(201).json(await run(({ knowledge }) => knowledge.upload({ ...req.body, libraryId: req.params.id }, req.viewer.sub)));
+  });
+  app.get('/api/kb/libraries/:id/documents/:docId', route((req, { knowledge }) => knowledge.getDocument(req.params.id, req.params.docId, req.viewer.sub)));
+  app.delete('/api/kb/libraries/:id/documents/:docId', route((req, { knowledge }) => knowledge.removeDocument(req.params.id, req.params.docId, req.viewer.sub)));
+  app.get('/api/kb/search', route((req, { knowledge }) => knowledge.searchChunks(String(req.query.q || ''), { limit: Number(req.query.limit) || 5, ownerId: req.viewer.sub })));
+  app.post('/api/kb/generate', async (req, res) => {
+    await limit(`kbgen:${req.viewer.sub}`, 10, 60000);
+    res.json(await run(({ drafts, knowledge }) => drafts.generate(req.body || {}, knowledge, req.viewer.sub)));
+  });
+  app.get('/api/drafts', route((req, { drafts }) => drafts.list({ status: req.query.status || 'draft' })));
+  app.post('/api/drafts/:id/confirm', route((req, { drafts }) => drafts.confirm(req.params.id)));
+  app.delete('/api/drafts/:id', route((req, { drafts }) => drafts.remove(req.params.id)));
+  app.get('/api/drafts/export', route((req, { drafts }) => drafts.export()));
+  app.post('/api/drafts/:id/swap', route((req, { drafts }) => drafts.markSwapped(req.params.id)));
+  app.get('/api/ai/config', route((req, { aiConfig }) => aiConfig.masked()));
+  app.put('/api/ai/config', route((req, { aiConfig }) => aiConfig.update(req.body || {})));
+  app.post('/api/ai/config/test', async (req, res) => {
+    await limit('aitest:' + req.viewer.sub, 6, 60000);
+    res.json(await run(({ aiConfig }) => aiConfig.test(req.body || {})));
+  });
+  app.get('/api/drafts', route((req, { drafts }) => drafts.list({ status: req.query.status || 'draft' })));
+  app.post('/api/drafts/:id/confirm', route((req, { drafts }) => drafts.confirm(req.params.id)));
+  app.delete('/api/drafts/:id', route((req, { drafts }) => drafts.remove(req.params.id)));
+  app.get('/api/drafts/export', route((req, { drafts }) => drafts.export()));
+  app.post('/api/drafts/:id/swap', route((req, { drafts }) => drafts.markSwapped(req.params.id)));
+  app.get('/api/ai/config', route((req, { aiConfig }) => aiConfig.masked()));
+  app.put('/api/ai/config', route((req, { aiConfig }) => aiConfig.update(req.body || {})));
+  app.post('/api/ai/config/test', async (req, res) => {
+    await limit('aitest:' + req.viewer.sub, 6, 60000);
+    res.json(await run(({ aiConfig }) => aiConfig.test(req.body || {})));
+  });
   app.post('/api/matches', async (req, res) => {
     await limit(`create:${req.viewer.sub}`, 30, 600000);
     const result = await run(({ service, learning, coach }) => {
