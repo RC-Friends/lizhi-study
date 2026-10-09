@@ -29,6 +29,7 @@ jobs:
       - run: npm run check:repository
       - run: npm test
       - run: npm run build
+      - run: node scripts/ci/frontend-assets.mjs
       - run: python3 -m pip install -r requirements.txt
       - run: python3 -m unittest discover -s tests -p 'test_*.py'
   stack:
@@ -46,6 +47,7 @@ jobs:
       - run: npm ci
       - run: npx --no-install playwright-core install --with-deps chromium
       - run: npm run build
+      - run: node scripts/ci/frontend-assets.mjs
       - run: npm run test:rag
       - run: npm run test:ci-stack
       - name: Save browser evidence only

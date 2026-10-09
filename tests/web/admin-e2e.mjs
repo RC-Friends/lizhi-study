@@ -7,7 +7,20 @@ export async function checkAdministration({ browser, base, adminPassword, learne
   const adminNav = name => page.getByRole('navigation', { name: '站点管理导航' }).getByRole('button', { name, exact: true });
   const studyNav = name => page.getByRole('navigation', { name: '学习中心导航' }).getByRole('button', { name, exact: true });
   try {
-    await page.goto(base); await page.getByRole('button', { name: '站点管理', exact: true }).click();
+    await page.goto(base);
+    // This 3.6 KB KaTeX font was previously inlined by Vite and rejected by
+    // font-src 'self'. Check an actual font load under the page's CSP.
+    const font = await page.evaluate(async () => {
+      const violations = [], collect = event => { if (event.effectiveDirective === 'font-src') violations.push(event.blockedURI); };
+      document.addEventListener('securitypolicyviolation', collect);
+      try {
+        const faces = await document.fonts.load('20px KaTeX_Size3', '(');
+        await document.fonts.ready;
+        return { loaded: faces.length > 0 && faces.every(face => face.status === 'loaded'), violations };
+      } finally { document.removeEventListener('securitypolicyviolation', collect); }
+    });
+    assert.deepEqual(font, { loaded: true, violations: [] }, 'KaTeX font must load under the document CSP');
+    await page.getByRole('button', { name: '站点管理', exact: true }).click();
     await page.getByLabel('超级管理员口令', { exact: true }).fill(adminPassword);
     await page.getByRole('button', { name: '进入管理面板', exact: true }).click();
     await page.getByRole('navigation', { name: '站点管理导航' }).waitFor();

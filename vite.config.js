@@ -10,6 +10,11 @@ export default defineConfig(() => {
     port: 5173,
     proxy: { '/api': target, '/assets/images': target },
   },
-  build: { outDir: 'dist', sourcemap: false },
+  build: {
+    outDir: 'dist', sourcemap: false,
+    // The document CSP permits same-origin fonts. Keep small KaTeX fonts as
+    // static files too, rather than letting Vite turn them into data URLs.
+    assetsInlineLimit: filePath => /\.(?:woff2?|ttf|otf)$/i.test(filePath) ? false : undefined,
+  },
   };
 });
