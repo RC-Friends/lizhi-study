@@ -251,8 +251,17 @@ test('two stateless backends share durable state, jobs and streams', async t => 
       await store.sync(key); const oldLease = await store.claim(key, 1, 'expired-worker', 1000);
       await restarted.pool.query("UPDATE study_kb_embeddings SET lease_until=now()-interval '1 second' WHERE index_key=$1 AND worker='expired-worker'", [key]);
       const newLease = await store.claim(key, 1, 'replacement-worker', 1000);
-      await store.complete(key, oldLease, [[1, 0]], 'expired-worker'); assert.equal((await store.status(key)).ready, 0);
-      await store.complete(key, newLease, [[0, 1]], 'replacement-worker'); assert.equal((await store.status(key)).ready, 1);
+      assert.equal(oldLease.length, 1); assert.equal(newLease.length, 1);
+      assert.equal(newLease[0].document_id, oldLease[0].document_id); assert.equal(newLease[0].chunk_index, oldLease[0].chunk_index);
+      // Work claims include private documents; visibility-filtered status must
+      // not be used to verify a randomly selected document's lease completion.
+      const leasedRow = async () => (await restarted.pool.query(
+        'SELECT status,worker,embedding FROM study_kb_embeddings WHERE index_key=$1 AND document_id=$2 AND chunk_index=$3',
+        [key, newLease[0].document_id, newLease[0].chunk_index])).rows[0];
+      await store.complete(key, oldLease, [[1, 0]], 'expired-worker');
+      assert.deepEqual(await leasedRow(), { status: 'working', worker: 'replacement-worker', embedding: null });
+      await store.complete(key, newLease, [[0, 1]], 'replacement-worker');
+      assert.deepEqual(await leasedRow(), { status: 'ready', worker: null, embedding: [0, 1] });
     } finally { hold = false; release.splice(0).forEach(resolve => resolve()); upstream.closeAllConnections(); await new Promise(resolve => upstream.close(resolve)); }
   });
 });
