@@ -143,21 +143,7 @@ export function createApp(bank, service, config, options = {}) {
     await limit(`kbgen:${req.viewer.sub}`, 10, 60000);
     res.json(await run(({ drafts, knowledge }) => drafts.generate(req.body || {}, knowledge, req.viewer.sub)));
   });
-  app.get('/api/drafts', route((req, { drafts }) => drafts.list({ status: req.query.status || 'draft' })));
-  app.post('/api/drafts/:id/confirm', route((req, { drafts }) => drafts.confirm(req.params.id)));
   app.delete('/api/drafts/:id', route((req, { drafts }) => drafts.remove(req.params.id)));
-  app.get('/api/drafts/export', route((req, { drafts }) => drafts.export()));
-  app.post('/api/drafts/:id/swap', route((req, { drafts }) => drafts.markSwapped(req.params.id)));
-  app.get('/api/ai/config', route((req, { aiConfig }) => aiConfig.masked()));
-  app.put('/api/ai/config', route((req, { aiConfig }) => aiConfig.update(req.body || {})));
-  app.post('/api/ai/config/test', async (req, res) => {
-    await limit('aitest:' + req.viewer.sub, 6, 60000);
-    res.json(await run(({ aiConfig }) => aiConfig.test(req.body || {})));
-  });
-  app.get('/api/drafts', route((req, { drafts }) => drafts.list({ status: req.query.status || 'draft' })));
-  app.post('/api/drafts/:id/confirm', route((req, { drafts }) => drafts.confirm(req.params.id)));
-  app.delete('/api/drafts/:id', route((req, { drafts }) => drafts.remove(req.params.id)));
-  app.get('/api/drafts/export', route((req, { drafts }) => drafts.export()));
   app.post('/api/drafts/:id/swap', route((req, { drafts }) => drafts.markSwapped(req.params.id)));
   app.get('/api/ai/config', route((req, { aiConfig }) => aiConfig.masked()));
   app.put('/api/ai/config', route((req, { aiConfig }) => aiConfig.update(req.body || {})));

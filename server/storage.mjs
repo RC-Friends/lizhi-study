@@ -1,7 +1,41 @@
 import pg from 'pg';
-import { validateKnowledge, validateLibrary } from './knowledge.mjs';
-import { validateDraft } from './question-drafts.mjs';
+import { MODULES } from './bank.mjs';
 
+
+export function validateKbLibrary(library) {
+  if (!library || typeof library.id !== 'string' || !library.id || typeof library.ownerId !== 'string' || !library.ownerId
+    || typeof library.name !== 'string' || !library.name || typeof library.description !== 'string'
+    || !['private', 'public'].includes(library.visibility) || !Number.isFinite(Date.parse(library.createdAt))) throw new Error('资料库结构无效。');
+  return library;
+}
+export function validateKbDocument(document) {
+  if (!document || typeof document.id !== 'string' || !document.id || typeof document.libraryId !== 'string' || !document.libraryId
+    || typeof document.sha256 !== 'string' || !['markdown', 'text', 'image', 'pdf', 'docx'].includes(document.format)
+    || typeof document.title !== 'string' || !document.title
+    || !Number.isFinite(document.size) || !Number.isFinite(Date.parse(document.uploadedAt))
+    || !Array.isArray(document.chunks)) throw new Error('知识库文档结构无效。');
+  if (document.format === 'image') {
+    if (document.transcribed !== false || !document.image || typeof document.image.mime !== 'string'
+      || typeof document.image.data !== 'string' || !document.image.data) throw new Error('图片资料结构无效。');
+    return document;
+  }
+  if (!document.chunks.length) throw new Error('知识库切片结构无效。');
+  for (const [index, chunk] of document.chunks.entries()) {
+    if (chunk.index !== index || typeof chunk.anchor !== 'string' || typeof chunk.text !== 'string' || !chunk.text) throw new Error('知识库切片结构无效。');
+  }
+  return document;
+}
+export function validateKbDraft(draft) {
+  if (!draft || typeof draft.id !== 'string' || !draft.id || !['draft', 'swapped'].includes(draft.status)
+    || (draft.module !== null && !MODULES.includes(draft.module)) || typeof draft.stem !== 'string' || !draft.stem
+    || typeof draft.answer !== 'string' || !['A', 'B', 'C', 'D'].includes(draft.answer)
+    || typeof draft.options !== 'object' || draft.options === null
+    || ['A', 'B', 'C', 'D'].some(key => typeof draft.options[key] !== 'string' || !draft.options[key])
+    || typeof draft.analysis !== 'string' || !draft.analysis
+    || !Array.isArray(draft.knowledgePoints) || typeof draft.source !== 'object' || draft.source === null
+    || !Number.isFinite(Date.parse(draft.createdAt))) throw new Error('AI 出题草稿结构无效。');
+  return draft;
+}
 export class StorageError extends Error {
   constructor(message = '数据库暂时不可用，请稍后重试。', code = 'storage_unavailable') {
     super(message); this.name = 'StorageError'; this.status = 503; this.code = code;
@@ -107,10 +141,10 @@ export class PostgresStore {
       store.learning = { version: 1, profiles: Object.fromEntries(profiles.map(row => [row.owner_id, row.payload])), questions: {} };
       for (const row of annotations) (store.learning.questions[row.owner_id] ||= {})[row.question_id] = row.payload;
       validateLearning(store.learning, bank);
-      store.kbLibraries = (await store.client.query('SELECT payload FROM study_kb_libraries ORDER BY payload->>\'createdAt\', id')).rows.map(row => validateLibrary(row.payload));
-      store.kb = (await store.client.query('SELECT payload FROM study_kb_documents ORDER BY uploaded_at, id')).rows.map(row => validateKnowledge(row.payload));
+      store.kbLibraries = (await store.client.query('SELECT payload FROM study_kb_libraries ORDER BY payload->>\'createdAt\', id')).rows.map(row => validateKbLibrary(row.payload));
+      store.kb = (await store.client.query('SELECT payload FROM study_kb_documents ORDER BY uploaded_at, id')).rows.map(row => validateKbDocument(row.payload));
       store.aiConfig = (await store.client.query("SELECT payload FROM study_ai_config WHERE id='platform'")).rows.map(row => row.payload);
-      store.kbDrafts = (await store.client.query('SELECT payload FROM study_kb_drafts ORDER BY created_at, id')).rows.map(row => validateDraft(row.payload));
+      store.kbDrafts = (await store.client.query('SELECT payload FROM study_kb_drafts ORDER BY created_at, id')).rows.map(row => validateKbDraft(row.payload));
       return store;
     } catch (error) {
       await store.close();

@@ -77,3 +77,5 @@
 .kb-search-row{display:flex;gap:8px;margin:8px 0 4px}
 .kb-search-row input{flex:1;height:38px;border:1px solid #e1e7d9;border-radius:8px;background:#fafcf7;padding:0 11px;font-size:13px;color:#4d6140;outline:none}
 .kb-search-row input:focus{border-color:#92aa78;box-shadow:0 0 0 2px #c9dda150}
+.kb-actions-row{margin-top:10px}
+.kb-summary-actions{margin-top:12px}

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { HttpError, MODULES } from './bank.mjs';
+import { validateKbDraft } from './storage.mjs';
 import { streamCompletion } from './providers.mjs';
 
 const DRAFT_LIMITS = { count: 10, total: 200 };
@@ -41,18 +42,6 @@ function normalizeDraft(raw, sources) {
   return { stem, options, answer, analysis, knowledgePoints, source };
 }
 
-export function validateDraft(draft) {
-  if (!draft || typeof draft.id !== 'string' || !draft.id || !['draft', 'confirmed', 'swapped'].includes(draft.status)
-    || (draft.module !== null && !MODULES.includes(draft.module)) || typeof draft.stem !== 'string' || !draft.stem
-    || typeof draft.answer !== 'string' || !OPTION_KEYS.includes(draft.answer)
-    || typeof draft.options !== 'object' || draft.options === null
-    || OPTION_KEYS.some(key => typeof draft.options[key] !== 'string' || !draft.options[key])
-    || typeof draft.analysis !== 'string' || !draft.analysis
-    || !Array.isArray(draft.knowledgePoints) || typeof draft.source !== 'object' || draft.source === null
-    || !Number.isFinite(Date.parse(draft.createdAt))) throw new Error('AI 出题草稿结构无效。');
-  return draft;
-}
-
 export class DraftService {
   constructor(config, { storage = null, persist = true, complete = null, llmResolver = null, clock = Date.now } = {}) {
     this.config = config; this.storage = storage; this.persist = persist;
@@ -62,12 +51,12 @@ export class DraftService {
     this.filename = config.draftsPath || path.join(path.dirname(config.runtimePath), 'drafts.json');
     this.drafts = new Map();
     if (storage) {
-      for (const draft of storage.kbDrafts || []) this.drafts.set(draft.id, validateDraft(draft));
+      for (const draft of storage.kbDrafts || []) this.drafts.set(draft.id, validateKbDraft(draft));
     } else if (persist && fs.existsSync(this.filename)) {
       try {
         const saved = JSON.parse(fs.readFileSync(this.filename, 'utf8'));
         if (saved.version !== 1 || !Array.isArray(saved.drafts)) throw new Error('Invalid draft state');
-        for (const draft of saved.drafts) this.drafts.set(draft.id, validateDraft(draft));
+        for (const draft of saved.drafts) this.drafts.set(draft.id, validateKbDraft(draft));
       } catch { throw new Error('草稿文件无法读取；为避免覆盖原记录，请先检查 drafts.json。'); }
     }
   }
@@ -81,12 +70,6 @@ export class DraftService {
     const llm = this.llmResolver() || {};
     return Boolean(llm.key && llm.baseUrl && llm.model);
   }
-  list({ status = 'draft' } = {}) {
-    if (!['draft', 'confirmed', 'all'].includes(status)) throw new HttpError(400, '草稿状态无效。');
-    const items = [...this.drafts.values()].filter(draft => status === 'all' || draft.status === status)
-      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt) || (a.id < b.id ? -1 : 1));
-    return { items, total: items.length };
-  }
   async generate(input = {}, knowledge = null, ownerId = null) {
     const query = typeof input.query === 'string' ? input.query.trim() : '';
     if (!query || query.length > 100) throw new HttpError(400, '请输入 1—100 字的出题主题或知识点。');
@@ -96,7 +79,7 @@ export class DraftService {
     if (!Number.isInteger(count) || count < 1 || count > DRAFT_LIMITS.count) throw new HttpError(400, `一次生成 1—${DRAFT_LIMITS.count} 道。`);
     if (!this.ready()) throw new HttpError(409, '尚未配置模型服务：到「学习设置 → AI 模型」里填入 Base URL 和 API Key 就能出题。', 'llm_not_configured');
     if (!knowledge) throw new HttpError(400, '知识库服务不可用。');
-    const remaining = DRAFT_LIMITS.total - this.list({ status: 'all' }).total;
+    const remaining = DRAFT_LIMITS.total - this.drafts.size;
     if (remaining <= 0) throw new HttpError(400, `草稿区已满（${DRAFT_LIMITS.total} 条），请先处理现有草稿。`);
     const sources = knowledge.searchChunks(query, { limit: 5, ownerId });
     if (!sources.length) throw new HttpError(400, '知识库里没有找到与该主题相关的片段，请先上传相关资料或换个关键词。');
@@ -111,7 +94,7 @@ export class DraftService {
       const draft = normalizeDraft(raw, keys);
       if (!draft) continue;
       const origin = sources[keys.indexOf(draft.source)];
-      const record = validateDraft({ id: crypto.randomUUID(), status: 'draft', module, ...draft,
+      const record = validateKbDraft({ id: crypto.randomUUID(), status: 'draft', module, ...draft,
         source: { title: origin.document.title, anchor: origin.anchor }, createdAt });
       this.drafts.set(record.id, record); created.push(record);
     }
@@ -125,13 +108,6 @@ export class DraftService {
     if (!draft || draft.status !== 'draft') throw new HttpError(404, '题目不存在或已处理。', 'draft_not_found');
     draft.status = 'swapped';
     if (this.storage) this.storage.saveKbDraft(draft); else this.save();
-    return { swapped: draft.id };
-  }
-  confirm(id) {
-    const draft = this.drafts.get(id);
-    if (!draft || draft.status !== 'draft') throw new HttpError(404, '草稿不存在或已处理。', 'draft_not_found');
-    draft.status = 'confirmed';
-    if (this.storage) this.storage.saveKbDraft(draft); else this.save();
     return draft;
   }
   remove(id) {
@@ -140,18 +116,5 @@ export class DraftService {
     this.drafts.delete(id);
     if (this.storage) this.storage.deleteKbDraft(id); else this.save();
     return { removed: id };
-  }
-  // Confirmed drafts become a standard question-import document, so publishing
-  // into the live bank reuses the existing reviewed import pipeline.
-  export() {
-    const confirmed = [...this.drafts.values()].filter(draft => draft.status === 'confirmed');
-    return {
-      schemaVersion: '1.0', bankId: 'kb-drafts',
-      questions: confirmed.map(draft => ({
-        id: `kb_${draft.id.replace(/-/g, '').slice(0, 16)}`, module: draft.module, stem: draft.stem,
-        options: draft.options, answer: draft.answer, analysis: draft.analysis,
-        knowledgePoints: draft.knowledgePoints, source: { type: '模拟题', title: `知识库生成 · ${draft.source.title}` },
-      })),
-    };
   }
 }

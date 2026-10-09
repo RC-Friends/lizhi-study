@@ -23,34 +23,31 @@ const setup = (complete = async () => canned) => {
   return { knowledge, drafts };
 };
 
-test('generate retrieves relevant chunks, stores reviewed drafts, and exports confirmed ones', async () => {
+test('free-subject generation stores questions straight for practice', async () => {
   const { knowledge, drafts } = setup();
   assert.equal(drafts.ready(), true);
-  const result = await drafts.generate({ query: '相遇问题', module: '数量关系', count: 2 }, knowledge, owner);
-  assert.equal(result.drafts.length, 1);
-  assert.equal(result.sources[0].title, '行程问题讲义');
+  const result = await drafts.generate({ query: '相遇问题', count: 2 }, knowledge, owner);
+  assert.equal(result.drafts.length, 1, 'only one question exists in the pool');
   const draft = result.drafts[0];
   assert.equal(draft.status, 'draft');
-  assert.equal(draft.answer, 'A');
+  assert.equal(draft.module, null, 'subject is free-form, no exam module required');
   assert.deepEqual(draft.source, { title: '行程问题讲义', anchor: '行程问题' });
-  const confirmed = drafts.confirm(draft.id);
-  assert.equal(confirmed.status, 'confirmed');
-  const exported = drafts.export();
-  assert.equal(exported.schemaVersion, '1.0');
-  assert.equal(exported.questions.length, 1);
-  assert.equal(exported.questions[0].module, '数量关系');
-  assert.equal(exported.questions[0].source.type, '模拟题');
-  assert.deepEqual(await drafts.generate({ query: '完全无关的主题量子芯片', module: '数量关系', count: 2 }, knowledge, owner).catch(issue => issue.message), '知识库里没有找到与该主题相关的片段，请先上传相关资料或换个关键词。');
+  const swapped = drafts.markSwapped(draft.id);
+  assert.equal(swapped.status, 'swapped');
+  const replacement = await drafts.generate({ query: '相遇问题', count: 1 }, knowledge, owner);
+  assert.equal(replacement.drafts.length, 1);
+  assert.throws(() => drafts.markSwapped(draft.id), /不存在或已处理/);
+  await assert.rejects(() => drafts.generate({ query: '完全无关的主题量子芯片', count: 1 }, knowledge, owner), /没有找到与该主题相关的片段/);
 });
 
 test('generation validates input, configuration, and model output format', async () => {
   const { knowledge, drafts } = setup();
-  await assert.rejects(() => drafts.generate({ query: '相遇', module: '不存在模块' }, knowledge, owner), /模块/);
-  await assert.rejects(() => drafts.generate({ query: '相遇', module: '数量关系', count: 99 }, knowledge, owner), /1—10/);
+  await assert.rejects(() => drafts.generate({ query: '相遇', module: '不存在模块' }, knowledge, owner), /出题模块无效/);
+  await assert.rejects(() => drafts.generate({ query: '相遇', count: 99 }, knowledge, owner), /1—10/);
   const unconfigured = new DraftService({ runtimePath: '/tmp/drafts-test-unused' }, { persist: false });
-  await assert.rejects(() => unconfigured.generate({ query: '相遇问题', module: '数量关系' }, knowledge, owner), /尚未配置模型服务/);
+  await assert.rejects(() => unconfigured.generate({ query: '相遇问题' }, knowledge, owner), /尚未配置模型服务/);
   const { drafts: messy } = setup(async () => '抱歉，我不能以 JSON 之外的格式回答。');
-  await assert.rejects(() => messy.generate({ query: '相遇问题', module: '数量关系' }, knowledge, owner), /没有按约定格式/);
+  await assert.rejects(() => messy.generate({ query: '相遇问题' }, knowledge, owner), /没有按约定格式/);
   const { drafts: invalid } = setup(async () => JSON.stringify([{ stem: '太短', options: {}, answer: 'Z', analysis: '' }]));
-  await assert.rejects(() => invalid.generate({ query: '相遇问题', module: '数量关系' }, knowledge, owner), /均未通过校验/);
+  await assert.rejects(() => invalid.generate({ query: '相遇问题' }, knowledge, owner), /均未通过校验/);
 });

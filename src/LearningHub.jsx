@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import DOMPurify from 'dompurify';
-import { ArrowRight, ArrowUpRight, BookOpen, Bookmark, CalendarDays, Check, ChevronDown, ChevronRight, CircleCheck, CircleHelp, CircleX, Clock3, Eye, FileText, Flame, GraduationCap, History, Image as ImageIcon, LayoutDashboard, LoaderCircle, LockKeyhole, LogOut, Play, Plus, RefreshCw, Search, Settings2, ShieldCheck, Sparkles, Target, Trash2, Trophy, X, Zap } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ArrowUpRight, BookOpen, Bookmark, CalendarDays, Check, ChevronDown, ChevronRight, CircleCheck, CircleHelp, CircleX, Clock3, Eye, FileText, Flame, GraduationCap, History, Image as ImageIcon, LayoutDashboard, LoaderCircle, LockKeyhole, LogOut, Play, Plus, RefreshCw, Search, Settings2, ShieldCheck, Sparkles, Target, Trash2, Trophy, X, Zap } from 'lucide-react';
 import { api } from './api.js';
 import './learning.css';
 
@@ -236,7 +236,7 @@ function KnowledgeBrowse() {
     {detail ? <>
       <section className="lh-panel">
         <PanelHeading kicker={`${detail.library.visibility === 'public' ? 'PUBLIC' : 'PRIVATE'} LIBRARY`} title={detail.library.name}>
-          <div className="lh-kb-head-actions"><button className="button primary small" onClick={() => setUploading(true)}><Plus size={15} />收录资料</button><button className="text-button" onClick={() => { setDetail(null); setPreview(null); }}><ChevronRight size={14} style={{ transform: 'rotate(180deg)' }} />返回列表</button></div>
+          <div className="lh-kb-head-actions"><button className="button primary small" onClick={() => setUploading(true)}><Plus size={15} />收录资料</button><button className="text-button" onClick={() => { setDetail(null); setPreview(null); }}><ArrowLeft size={14} />返回列表</button></div>
         </PanelHeading>
         {detail.library.description && <p className="lh-kb-lib-desc">{detail.library.description}</p>}
         {saved && <p className="lh-saved" role="status"><CircleCheck size={15} />{saved}</p>}
@@ -307,7 +307,7 @@ function AiPractice() {
       <div className="lh-review-options">{Object.entries(question.options).map(([label, text]) => <div key={label} className={label === question.answer ? 'correct' : ''}><strong>{label}</strong><span>{text}</span></div>)}</div>
       <p className="kb-draft-analysis"><strong>解析</strong>{question.analysis}</p>
     </article>)}</div>
-      <div className="lh-profile-save" style={{ marginTop: 10 }}><button className="button primary" onClick={start} disabled={busy || !description.trim()}>再来一组（同主题）</button><button className="button ghost" onClick={() => setSession(null)}>换个主题</button></div>
+      <div className="lh-profile-save kb-summary-actions"><button className="button primary" onClick={start} disabled={busy || !description.trim()}>再来一组（同主题）</button><button className="button ghost" onClick={() => setSession(null)}>换个主题</button></div>
     </section></>;
   return <><div className="lh-page-heading"><div><span className="lh-kicker">AI PRACTICE · {session.index + 1}/{session.questions.length}</span><h1>主题「{session.query}」</h1><p>点击选项即可作答；答完自动公布答案与解析。觉得题目不合适，随时换一题。</p></div></div>
     <section className="lh-panel">
@@ -317,7 +317,7 @@ function AiPractice() {
         className={`kb-option ${revealed && label === current.answer ? 'correct' : ''} ${revealed && choice === label && label !== current.answer ? 'wrong' : ''}`}
         onClick={() => answer(label)}><strong>{label}</strong><span>{text}</span></button>)}</div>
       {revealed && <div className="lh-kb-chunk"><small>{choice === current.answer ? '答对啦，继续保持！' : `正确答案是 ${current.answer}。`}</small><p><strong>解析：</strong>{current.analysis}</p></div>}
-      <div className="lh-notebook-actions" style={{ marginTop: 10 }}>
+      <div className="lh-notebook-actions kb-actions-row">
         <button className="text-button" disabled={busy} onClick={swap}><RefreshCw size={14} />此题不好，换一题</button>
         <button className="button primary small" disabled={!revealed} onClick={next}>{session.index + 1 >= session.questions.length ? '看结果' : '下一题'}<ArrowRight size={14} /></button>
       </div>
