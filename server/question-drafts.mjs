@@ -3,8 +3,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { HttpError, MODULES } from './bank.mjs';
 import { validateDraft } from './knowledge-validation.mjs';
-export { validateDraft } from './knowledge-validation.mjs';
 import { streamCompletion } from './providers.mjs';
+export { validateDraft } from './knowledge-validation.mjs';
 
 const DRAFT_LIMITS = { count: 10, total: 200 };
 const OPTION_KEYS = ['A', 'B', 'C', 'D'];

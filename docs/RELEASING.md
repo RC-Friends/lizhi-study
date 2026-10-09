@@ -8,6 +8,7 @@ GitHub Actions 对 main 推送和 PR 执行两个独立任务：
 
 - Node.js 24 单元测试、仓库敏感文件检查、前端构建，以及 Python 数据采集管线测试。
 - 构建前后端 Docker 镜像，启动 PostgreSQL、Redis、SeaweedFS 和两个后端副本；测试事务、缓存版本与共享任务，再用 Chromium 点击桌面和手机界面，验证登录、图题、错题本、公开监督、并行答题、计时和报告。
+- 使用本机合成模型接口，在浏览器配置 Embedding/Rerank、切换四种组合、完成知识库练习，并验证单边故障和双边超时的回退提示。
 
 测试只使用随机生成的测试凭证、合成题库和演示模型，没有真实模型调用。测试端口随机分配并仅绑定 loopback。CI artifact 仅保存明确列出的浏览器截图和结果 JSON，保留 7 天，不上传整个工作目录或容器日志。所有第三方 Action 固定到提交 SHA，PR 任务仅有读取代码权限，不读取部署密钥。
 
@@ -20,6 +21,7 @@ npm run build
 python3 -m pip install -r requirements.txt
 python3 -m unittest discover -s tests -p 'test_*.py'
 npx --no-install playwright-core install --with-deps chromium
+npm run test:rag
 npm run test:ci-stack
 ```
 
@@ -30,13 +32,14 @@ npm run test:ci-stack
 采用 `v主版本.次版本.修订号` tag。先把功能和 CI 修改提交到 main，等 CI 通过，再准备版本提交：
 
 ```bash
-npm version 0.2.0 --no-git-tag-version
+npm version 0.4.0 --no-git-tag-version
 # 在 CHANGELOG.md 添加对应版本说明。
 git add package.json package-lock.json CHANGELOG.md
-git commit -m 'chore: release v0.2.0'
-git tag -a v0.2.0 -m 'Lizhi Study v0.2.0'
+git commit -m 'chore: release v0.4.0'
 git push origin main
-git push origin v0.2.0
+# 确认这条提交对应的 main CI 已通过，再发布 tag。
+git tag -a v0.4.0 -m 'Lizhi Study v0.4.0'
+git push origin v0.4.0
 ```
 
 Release workflow 验证 tag、package 版本、更新日志和提交标题严格匹配，然后重新执行完整 CI。通过后构建并推送两个 `linux/amd64` 镜像到 `ghcr.io/<owner>/<repo>-backend:<tag>` 与 `ghcr.io/<owner>/<repo>-frontend:<tag>`，附带源码仓库、版本和 commit 标签。其他架构可使用仓库中的 Dockerfile 自行构建。发布任务只使用 GitHub 自带的 `GITHUB_TOKEN`，分别授予镜像写入和 Release 写入权限，无需配置 Harbor、Kubernetes 或 SSH 凭证。

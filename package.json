@@ -12,6 +12,7 @@
     "start": "node server/index.mjs",
     "test": "node --test tests/web/*.test.mjs",
     "test:e2e": "node tests/web/e2e.mjs",
+    "test:rag": "node tests/web/rag-e2e.mjs",
     "doctor": "node scripts/doctor.mjs",
     "resources:pack": "node scripts/package-resources.mjs",
     "db:import": "node scripts/import-legacy.mjs",

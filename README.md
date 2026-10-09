@@ -1,6 +1,6 @@
 # 栗知自习室 · Lizhi Study
 
-[![CI](https://github.com/RC-CHN/lizhi-study/actions/workflows/ci.yml/badge.svg)](https://github.com/RC-CHN/lizhi-study/actions/workflows/ci.yml)
+[![CI](https://github.com/RC-Friends/lizhi-study/actions/workflows/ci.yml/badge.svg)](https://github.com/RC-Friends/lizhi-study/actions/workflows/ci.yml)
 
 「栗」是陪练小栗，「知」是每天积累的一点知识。一个可以独自练习、邀请朋友监督，也可以与 AI 同场答题的行测自习室。
 
@@ -61,7 +61,7 @@ docker compose --env-file .env.stack up -d --wait --scale backend=2
 - [标准题库导入、图片范例与在线发布 API](docs/QUESTION_IMPORT.md)
 - [游客 AI 监督技能、网页下载与公开统计](docs/OBSERVER_SKILL.md)
 - [单考生模式、超级管理员面板与模型配置初始化](docs/ADMINISTRATION.md)
-- [知识库 Embedding、混合检索与索引维护](docs/KNOWLEDGE_RETRIEVAL.md)
+- [知识库 Embedding、Rerank、组合回退与索引维护](docs/KNOWLEDGE_RETRIEVAL.md)
 - [自动化验收与版本发布](docs/RELEASING.md)、[更新日志](CHANGELOG.md)
 
 首次启动前，可在 `.env.stack` 中填写 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL` 等模型设置，后端只在数据库尚未初始化模型配置时导入一次。此后从页脚「站点管理」登录，统一编辑通用 LLM、JEV、视觉助手、Embedding 和 Rerank；对战、陪练、知识库出题都读取数据库配置。Embedding / Rerank 首次加入已有部署时，也支持只导入一次对应的启动变量。两种检索模型独立启停，缺失或故障时回退到可用步骤，详见[知识库检索说明](docs/KNOWLEDGE_RETRIEVAL.md)。重启或修改旧环境变量不会覆盖面板中的设置。不配置模型也能自主练习和使用演示对战。

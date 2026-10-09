@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/RC-CHN/lizhi-study/schema/question-import.schema.json",
+  "$id": "https://github.com/RC-Friends/lizhi-study/schema/question-import.schema.json",
   "title": "Lizhi Study question import 1.0",
   "type": "object",
   "additionalProperties": false,

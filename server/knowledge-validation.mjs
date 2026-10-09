@@ -38,4 +38,3 @@ export function validateDraft(draft) {
     || !Number.isFinite(Date.parse(draft.createdAt))) throw new Error('AI 出题草稿结构无效。');
   return draft;
 }
-

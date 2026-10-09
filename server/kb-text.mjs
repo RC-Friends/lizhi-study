@@ -89,4 +89,3 @@ export async function extractDocumentText(format, fileBase64) {
   }
   throw new HttpError(400, '暂不支持该文件格式。');
 }
-
