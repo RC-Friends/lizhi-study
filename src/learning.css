@@ -79,3 +79,7 @@
 .kb-search-row input:focus{border-color:#92aa78;box-shadow:0 0 0 2px #c9dda150}
 .kb-actions-row{margin-top:10px}
 .kb-summary-actions{margin-top:12px}
+.kb-card p{flex:1}
+.kb-card p{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.kb-card-actions{margin-top:auto}
+.kb-card-meta{margin-top:auto}
