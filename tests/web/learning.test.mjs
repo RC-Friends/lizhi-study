@@ -138,3 +138,26 @@ test('notebook filters run before pagination and mastered past mistakes can be r
   assert.throws(() => learning.collection({ module: 'bad' }), /模块无效/);
   assert.throws(() => learning.collection({ mastered: 'maybe' }), /筛选无效/);
 });
+test('smart scope ranks redo, weak-module, and extend questions deterministically', () => {
+  const { matches, learning } = setup();
+  assert.deepEqual(learning.eligibleIds('smart'), ['q2', question.id]);
+  practice(matches, { choice: 'A', timestamp: '2026-10-03T01:00:00Z' });
+  assert.deepEqual(learning.eligibleIds('smart'), [question.id, 'q2']);
+  const plan = learning.smartPlan({ count: 2, modules: ['数量关系', '判断推理'] });
+  assert.deepEqual(plan, { ids: [question.id, 'q2'], composition: { review: 1, weak: 0, extend: 1 } });
+  assert.deepEqual(learning.smartPlan({ count: 2, modules: ['数量关系', '判断推理'] }), plan);
+  assert.deepEqual(learning.smartPlan({ count: 1, modules: ['判断推理'] }), { ids: ['q2'], composition: { review: 0, weak: 0, extend: 1 } });
+  assert.equal(learning.availability({ scope: 'smart', modules: ['数量关系'] }).count, 1);
+  assert.throws(() => learning.smartPlan({ count: 3, modules: ['数量关系', '判断推理'] }), /只有 2 道题/);
+  assert.throws(() => learning.smartPlan({ count: 0 }), /题量/);
+});
+test('smart plan avoids repeating a knowledge point while the pool allows, then backfills', () => {
+  const bank = new QuestionBank(null, [question, { ...question, id: 'q3', knowledge_points: ['方程'] }, { ...question, id: 'q4', knowledge_points: ['方程', '应用题'] }]);
+  const matches = new MatchService(bank, config, { persist: false, providers: { llm: () => new Promise(() => {}) } });
+  const learning = new LearningService(bank, matches, config, { persist: false, clock: () => Date.parse('2026-10-03T02:00:00Z') });
+  const plan = learning.smartPlan({ count: 2, modules: ['数量关系'] });
+  assert.deepEqual(plan.ids, ['q3', question.id]);
+  assert.deepEqual(plan.composition, { review: 0, weak: 0, extend: 2 });
+  const full = learning.smartPlan({ count: 3, modules: ['数量关系'] });
+  assert.deepEqual(full.ids, ['q3', question.id, 'q4']);
+});

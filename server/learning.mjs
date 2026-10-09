@@ -16,6 +16,19 @@ const paginate = (items, { page = 1, pageSize = 20 } = {}) => {
   if (!Number.isInteger(page) || page < 1 || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) throw new HttpError(400, '分页参数无效。');
   return { items: items.slice((page - 1) * pageSize, page * pageSize), total: items.length, page, pageSize, pages: Math.ceil(items.length / pageSize) };
 };
+// Smart assembly ranks the pool deterministically: redo unmastered wrong
+// questions first, then unseen questions in weak modules (accuracy < 70%),
+// then everything else; ties break by question id so the same study state
+// always yields the same paper.
+const SMART_WEAK_MODULE = 0.7;
+const smartKey = (row, stats, annotations, isMastered, moduleScores) => {
+  const item = stats.get(row.id), moduleScore = moduleScores.get(row.module) ?? 1;
+  const tier = !item ? (moduleScore < SMART_WEAK_MODULE ? 1 : 2)
+    : item.correct < item.attempts && !isMastered(item, annotations[row.id]) ? 0 : 2;
+  return { tier, wrongCount: item ? item.attempts - item.correct : 0, moduleScore, id: row.id };
+};
+const compareSmart = (a, b) => a.tier - b.tier || b.wrongCount - a.wrongCount || a.moduleScore - b.moduleScore || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+const SMART_TIERS = ['review', 'weak', 'extend'];
 
 export class LearningService {
   constructor(bank, matches, config, { persist = true, clock = Date.now } = {}) {
@@ -86,12 +99,51 @@ export class LearningService {
     return Boolean(stats?.lastCorrect);
   }
   eligibleIds(scope = 'all', ownerId = PRIMARY) {
-    if (!['all', 'unseen', 'wrong', 'bookmarked'].includes(scope)) throw new HttpError(400, '练习范围无效。');
+    if (!['all', 'unseen', 'wrong', 'bookmarked', 'smart'].includes(scope)) throw new HttpError(400, '练习范围无效。');
     if (scope === 'all') return null;
+    if (scope === 'smart') return this.smartOrder(ownerId);
     const stats = this.questionStats(ownerId), annotations = this.annotations(ownerId);
     return this.bank.rows.filter(q => scope === 'unseen' ? !stats.has(q.id)
       : scope === 'bookmarked' ? annotations[q.id]?.bookmarked
         : stats.has(q.id) && stats.get(q.id).correct < stats.get(q.id).attempts && !this.isMastered(stats.get(q.id), annotations[q.id])).map(q => q.id);
+  }
+  moduleAccuracy(ownerId = PRIMARY) {
+    const scores = new Map();
+    for (const name of MODULES) {
+      const rows = this.attempts(ownerId).filter(a => a.module === name);
+      if (rows.length) scores.set(name, rows.filter(a => a.correct).length / rows.length);
+    }
+    return scores;
+  }
+  smartOrder(ownerId = PRIMARY) {
+    const stats = this.questionStats(ownerId), annotations = this.annotations(ownerId), moduleScores = this.moduleAccuracy(ownerId);
+    return this.bank.rows.map(row => ({ row, key: smartKey(row, stats, annotations, this.isMastered.bind(this), moduleScores) }))
+      .sort((a, b) => compareSmart(a.key, b.key)).map(entry => entry.row.id);
+  }
+  smartPlan(input = {}, ownerId = PRIMARY) {
+    const count = input.count;
+    if (!Number.isInteger(count) || count < 1 || count > 100) throw new HttpError(400, '题量须为 1—100 道整数。');
+    const settings = { modules: input.modules || MODULES, source: input.source || 'all', images: input.images || 'mixed' };
+    const pool = this.bank.eligible(settings);
+    if (pool.length < count) throw new HttpError(400, `当前条件只有 ${pool.length} 道题，请减少题量或放宽筛选。`);
+    const stats = this.questionStats(ownerId), annotations = this.annotations(ownerId), moduleScores = this.moduleAccuracy(ownerId);
+    const mastered = this.isMastered.bind(this);
+    const ordered = pool.map(row => ({ row, key: smartKey(row, stats, annotations, mastered, moduleScores) }))
+      .sort((a, b) => compareSmart(a.key, b.key));
+    // Greedy pass skips questions whose knowledge points are already covered;
+    // a second pass backfills if the pool runs short, so count is always met.
+    const usedPoints = new Set(), picked = [], deferred = [];
+    const pointsOf = row => Array.isArray(row.knowledge_points) ? row.knowledge_points.filter(point => typeof point === 'string' && point) : [];
+    for (const entry of ordered) {
+      if (picked.length >= count) break;
+      const points = pointsOf(entry.row);
+      if (points.some(point => usedPoints.has(point))) { deferred.push(entry); continue; }
+      picked.push(entry); for (const point of points) usedPoints.add(point);
+    }
+    for (const entry of deferred) { if (picked.length >= count) break; picked.push(entry); }
+    const composition = { review: 0, weak: 0, extend: 0 };
+    for (const entry of picked) composition[SMART_TIERS[entry.key.tier]]++;
+    return { ids: picked.map(entry => entry.row.id), composition };
   }
   availability(input, ownerId = PRIMARY) {
     const settings = { modules: input.modules || MODULES, source: input.source || 'all', images: input.images || 'mixed' };
@@ -171,7 +223,8 @@ export class LearningService {
     }] : []);
     return { id: match.id, name: match.name, status: 'finished', originalStatus: match.status, current: null,
       revision: match.revision, settings: { mode: match.settings.mode, demo: false, scope: match.settings.scope || 'all',
-        modules: match.settings.modules, count: match.questionIds.length, source: match.settings.source, images: match.settings.images },
+        modules: match.settings.modules, count: match.questionIds.length, source: match.settings.source, images: match.settings.images,
+        composition: match.settings.composition || null },
       createdAt: match.createdAt, finishedAt: match.finishedAt || null, endReason: match.endReason || 'in_progress',
       index: history.at(-1).index, count: match.questionIds.length, scores: scoreRounds(completed, match.settings), history, model: match.model || null };
   }
