@@ -344,9 +344,9 @@ function AiConfigPanel() {
     try { const result = await api('/api/ai/config/test', { method: 'POST', body: { baseUrl: form.baseUrl, apiKey: form.apiKey || undefined, model: form.model } }); setTestLine(`连接成功，${result.latencyMs} ms，模型回复：${result.reply}`); } catch (issue) { setError(issue.message); } finally { setBusy(false); }
   };
   const presets = masked?.presets || {};
-  return <section className="lh-panel"><PanelHeading kicker="AI MODEL" title="AI 模型设置" />
+  return <form className="lh-panel lh-profile-form" onSubmit={save}>
+    <PanelHeading kicker="AI MODEL" title="AI 模型设置" />
     <p className="lh-kb-lib-desc">配好一次，知识库出题、陪练复盘就用这套模型。密钥保存在服务器，不会回显明文。</p>
-    <form className="lh-profile-form lh-kb-form" onSubmit={save}>
       <div className="field"><label htmlFor="ai-preset">快速预设</label><select id="ai-preset" value={form.preset || 'custom'} onChange={event => { const preset = presets[event.target.value]; setForm(state => ({ ...state, preset: event.target.value, baseUrl: preset?.baseUrl || state.baseUrl, model: preset?.model || state.model })); }}><option value="custom">自定义（OpenAI 兼容）</option>{Object.entries(presets).filter(([key]) => key !== 'custom').map(([key, preset]) => <option key={key} value={key}>{key}</option>)}</select><small>选预设自动填地址和模型名，再填你自己的 API Key。</small></div>
       <div className="field"><label htmlFor="ai-baseurl">Base URL</label><input id="ai-baseurl" placeholder="https://api.deepseek.com/v1" value={form.baseUrl} onChange={event => setForm({ ...form, baseUrl: event.target.value })} required /><small>OpenAI 兼容接口地址，留空则使用服务器环境变量里的默认模型。</small></div>
       <div className="field"><label htmlFor="ai-key">API Key</label><input id="ai-key" type="password" placeholder={masked?.hasKey ? `已保存（尾号 ${masked.keyTail}），留空表示不修改` : 'sk-…'} value={form.apiKey} onChange={event => setForm({ ...form, apiKey: event.target.value })} /><small>{masked?.source === 'custom' ? '当前使用界面保存的密钥。' : '当前使用服务器环境变量中的密钥（如有）。'}</small></div>
@@ -354,7 +354,7 @@ function AiConfigPanel() {
       <div className="lh-profile-save"><button className="button primary" type="submit" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}保存设置</button><button className="button ghost" type="button" disabled={busy || !form.baseUrl} onClick={test}>测试连接</button>{saved && <span role="status"><CircleCheck size={16} />{saved}</span>}</div>
       {testLine && <p className="lh-saved" role="status"><CircleCheck size={15} />{testLine}</p>}
       {error && <p className="lh-error" role="alert"><CircleX size={16} />{error}</p>}
-    </form></section>;
+    </form>;
 }
 
 function ProfileSettings({ profile, onSave, busy }) {
