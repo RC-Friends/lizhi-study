@@ -20,7 +20,7 @@ JWT_SECRET=<独立随机签名密钥，至少32字节>
 
 ## 首次初始化模型配置
 
-数据库没有模型配置时，后端在初始化事务中把 `LLM_*`、`JEV_*`、`VISION_*` 和 `EMBEDDING_*` 导入 `study_ai_config`。已有配置时只校验并使用数据库值，不再合并环境变量；多个副本同时启动也只初始化一次。既有版本首次增加 Embedding 时，只导入这个新提供方的 `EMBEDDING_*`，不改写已有 LLM/JEV/视觉助手设置；没有提供启动值时，Embedding 默认为停用、无密钥。
+数据库没有模型配置时，后端在初始化事务中把 `LLM_*`、`JEV_*`、`VISION_*`、`EMBEDDING_*` 和 `RERANK_*` 导入 `study_ai_config`。已有配置时只校验并使用数据库值，不再合并环境变量；多个副本同时启动也只初始化一次。既有版本首次增加 Embedding 或 Rerank 时，只导入对应新提供方的启动值，不改写已有模型设置；未提供启动值则默认为停用、无密钥。
 
 之后通过管理面板维护：
 
@@ -28,6 +28,7 @@ JWT_SECRET=<独立随机签名密钥，至少32字节>
 - **JEV 决策模型**：JEV 对战的地址、密钥、模型与超时。
 - **JEV 视觉助手**：图片转写服务，可独立启停和配置。
 - **Embedding 检索**：知识库语义检索的地址、独立密钥、模型、向量维度与相关度阈值；支持连接测试、查看索引进度、重试失败片段和试查资料。
+- **Rerank 重排**：候选片段的二次排序，支持独立启停、连接测试、候选数与相关度阈值。可单独配合关键词检索，也可搭配 Embedding。两者支持明确关闭 API Key 认证，适配无需密钥的模型服务。
 - **高级参数**：请求超时、输出额度、图题额度、手动重试额度、思考模式及推理强度。
 
 保存后，所有后端的新请求和新执行任务读取最新配置；已经发出的模型请求继续使用其原配置。配置变更推进共享修订号，考生页面也会刷新模型可用状态，无需重启。
@@ -46,7 +47,7 @@ JWT_SECRET=<独立随机签名密钥，至少32字节>
 
 网页使用超级管理员 JWT 调用导入 API，不需要把命令行管理令牌或对象存储密钥复制到浏览器。发布仍需后端的 `QUESTION_IMPORT_S3_ACCESS_KEY_ID` 和 `QUESTION_IMPORT_S3_SECRET_ACCESS_KEY`；未配置时，面板显示原因，格式校验仍可用。
 
-知识库出题支持 BM25 关键词与 Embedding 语义混合检索，配置与索引操作见 [知识库检索说明](KNOWLEDGE_RETRIEVAL.md)。当前 AI 出题为临时巩固练习，答案由模型生成，暂不计入正式学习统计；原题库练习、错题本、公开监督及 AI 监督技能保持原来的记录口径。
+知识库出题支持 BM25、可选 Embedding 和可选 Rerank，配置、索引与四种组合的回退说明见 [知识库检索说明](KNOWLEDGE_RETRIEVAL.md)。当前 AI 出题为临时巩固练习，答案由模型生成，暂不计入正式学习统计；原题库练习、错题本、公开监督及 AI 监督技能保持原来的记录口径。
 
 ## 接口
 
@@ -55,8 +56,8 @@ JWT_SECRET=<独立随机签名密钥，至少32字节>
 | `POST /api/login` | `{ "role": "admin", "password": "..." }` 登录管理员；省略角色仍为考生 |
 | `GET /api/session` | 返回当前身份，不回显口令 |
 | `GET /api/admin/status` | 管理员查看服务、题库与资料统计 |
-| `GET /api/ai/config` | 管理员读取四个模型的脱敏配置和修订号 |
-| `PUT /api/ai/config` | 管理员修改 `provider: llm / jev / vision / embedding`；带 `revision` 防止覆盖其他页面的新设置 |
+| `GET /api/ai/config` | 管理员读取五个模型的脱敏配置和修订号 |
+| `PUT /api/ai/config` | 管理员修改 `provider: llm / jev / vision / embedding / rerank`；带 `revision` 防止覆盖其他页面的新设置 |
 | `POST /api/ai/config/test` | 管理员测试所选模型，不保存测试值 |
 | `/api/admin/question-bank/*` | 超级管理员 JWT 或原独立导入令牌；考生禁止访问 |
 | `GET /api/admin/rag/status` | 管理员查看向量索引统计 |

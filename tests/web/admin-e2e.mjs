@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 
-export async function checkAdministration({ browser, base, adminPassword, learnerPassword, screenshot, modelEndpoint }) {
+export async function checkAdministration({ browser, base, adminPassword, learnerPassword, screenshot, modelEndpoint, ragModels }) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1050 } });
   const page = await context.newPage(), errors = []; page.on('pageerror', error => errors.push(error.message)); page.setDefaultTimeout(20000);
   const adminNav = name => page.getByRole('navigation', { name: '站点管理导航' }).getByRole('button', { name, exact: true });
@@ -50,17 +50,50 @@ export async function checkAdministration({ browser, base, adminPassword, learne
     await adminNav('模型配置').click(); await page.getByRole('button', { name: 'Embedding 检索', exact: true }).click();
     await page.getByRole('heading', { name: 'Embedding 检索', exact: true }).waitFor(); await page.getByLabel('向量索引进度', { exact: true }).waitFor();
     if (modelEndpoint) {
-      await page.locator('#ai-baseurl').fill(modelEndpoint); await page.locator('#ai-key').fill('browser-test-embedding-key'); await page.locator('#ai-model').fill('browser-vector-model');
+      const embedding = ragModels?.embedding;
+      await page.locator('#ai-baseurl').fill(embedding?.baseUrl || modelEndpoint);
+      if (embedding?.authRequired === false) await page.getByLabel('服务需要 API Key', { exact: true }).uncheck();
+      else await page.locator('#ai-key').fill(embedding?.key || 'browser-test-embedding-key');
+      await page.locator('#ai-model').fill(embedding?.model || 'browser-vector-model');
       await page.getByLabel('启用此模型', { exact: true }).check();
       await page.getByRole('button', { name: '测试连接', exact: true }).click(); await page.getByRole('status').filter({ hasText: '向量接口已响应' }).waitFor();
       await page.getByRole('button', { name: '保存模型配置', exact: true }).click(); await page.getByRole('status').filter({ hasText: '已保存' }).waitFor();
       await page.getByText('索引已就绪', { exact: true }).waitFor();
-      await page.getByLabel('试着问一句', { exact: true }).fill('迎面走多久碰头');
+      await page.getByLabel('试着问一句', { exact: true }).fill(ragModels ? '相向而行几小时后相遇' : '迎面走多久碰头');
     } else await page.getByLabel('试着问一句', { exact: true }).fill('相遇问题');
     await page.getByRole('button', { name: '检索资料', exact: true }).click();
     await page.getByRole('status').filter({ hasText: modelEndpoint ? '已结合语义与关键词检索' : '已使用关键词检索' }).waitFor();
     assert.ok(await page.locator('.ad-rag-results article').count() > 0); await screenshot(page, 'admin-embedding');
     await page.setViewportSize({ width: 390, height: 844 }); await screenshot(page, 'admin-mobile-embedding'); await page.setViewportSize({ width: 1440, height: 1050 });
+    await page.getByRole('button', { name: 'Rerank 重排', exact: true }).click();
+    await page.getByRole('heading', { name: 'Rerank 重排', exact: true }).waitFor();
+    if (modelEndpoint) {
+      const rerank = ragModels?.rerank;
+      await page.locator('#ai-baseurl').fill(rerank?.baseUrl || modelEndpoint);
+      await page.getByLabel('服务需要 API Key', { exact: true }).setChecked(rerank?.authRequired ?? false);
+      if (rerank?.authRequired) await page.locator('#ai-key').fill(rerank.key);
+      else assert.ok(await page.locator('#ai-key').isDisabled());
+      await page.locator('#ai-model').fill(rerank?.model || 'browser-reranker-model'); await page.getByLabel('启用此模型', { exact: true }).check();
+      await page.getByRole('button', { name: '测试连接', exact: true }).click(); await page.getByRole('status').filter({ hasText: '重排接口已响应' }).waitFor();
+      await page.getByText('高级参数', { exact: false }).click(); await page.locator('#model-minScore').fill('0.025');
+      await page.getByRole('button', { name: '保存模型配置', exact: true }).click(); await page.getByRole('status').filter({ hasText: '已保存' }).waitFor();
+      assert.equal(await page.locator('#model-minScore').inputValue(), '0.025');
+      await screenshot(page, 'admin-rerank'); await page.setViewportSize({ width: 390, height: 844 }); await screenshot(page, 'admin-mobile-rerank');
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await page.setViewportSize({ width: 1440, height: 1050 });
+      for (const embeddingEnabled of [false, true]) for (const rerankEnabled of [false, true]) {
+        for (const [name, enabled] of [['Embedding 检索', embeddingEnabled], ['Rerank 重排', rerankEnabled]]) {
+          await page.getByRole('button', { name, exact: true }).click(); await page.getByLabel('启用此模型', { exact: true }).setChecked(enabled);
+          await page.getByRole('button', { name: '保存模型配置', exact: true }).click(); await page.getByRole('status').filter({ hasText: '已保存' }).waitFor();
+        }
+        await page.getByLabel('试着问一句', { exact: true }).fill('相遇问题');
+        const response = page.waitForResponse(response => new URL(response.url()).pathname === '/api/kb/search');
+        await page.getByRole('button', { name: '检索资料', exact: true }).click(); const result = await (await response).json();
+        assert.equal(result.mode, embeddingEnabled ? 'hybrid' : 'keyword'); assert.equal(result.rerank.applied, rerankEnabled); assert.ok(result.items.length > 0);
+        await page.getByRole('status').filter({ hasText: `找到 ${result.items.length} 个片段` }).waitFor();
+        assert.equal((await page.locator('.ad-rag-results').innerText()).includes('已重排'), rerankEnabled);
+        await screenshot(page, `rag-e${Number(embeddingEnabled)}-r${Number(rerankEnabled)}`);
+      }
+    } else await screenshot(page, 'admin-rerank');
     await adminNav('题库导入').click(); await page.getByLabel('选择标准题库 JSON', { exact: true }).setInputFiles(new URL('../../examples/question-bank/questions.json', import.meta.url).pathname);
     await page.getByRole('status').filter({ hasText: '格式校验通过' }).waitFor(); await screenshot(page, 'admin-import');
     await page.setViewportSize({ width: 390, height: 844 });

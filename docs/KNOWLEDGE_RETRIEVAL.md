@@ -1,6 +1,6 @@
-# 知识库语义检索
+# 知识库检索与重排
 
-知识库出题使用原文片段作为依据。BM25 查找关键词，Embedding 查找语义相近的内容，两路结果使用 Reciprocal Rank Fusion 合并排名，选取至多五个片段，并保留资料标题与章节。单份文档至多占三个片段，减少相似内容重复占满上下文。
+知识库出题使用原文片段作为依据。BM25 查找关键词，Embedding 查找语义相近的内容，两路结果使用 Reciprocal Rank Fusion 合并排名。可选 Rerank 再比较问题与候选片段，按相关度排序、过滤低相关片段，最终选取至多五个片段，并保留资料标题与章节。单份文档至多占三个片段，减少相似内容重复占满上下文。
 
 ## 配置
 
@@ -11,17 +11,44 @@ EMBEDDING_BASE_URL=https://api.example.com/v1
 EMBEDDING_API_KEY=<该向量服务的密钥>
 EMBEDDING_MODEL=<服务商提供的向量模型标识>
 EMBEDDING_ENABLED=true
+EMBEDDING_AUTH_REQUIRED=true
 EMBEDDING_TIMEOUT_MS=30000
 EMBEDDING_BATCH_SIZE=16
 EMBEDDING_DIMENSIONS=0
 EMBEDDING_MIN_SIMILARITY=0.3
+
+RERANK_BASE_URL=https://ranking.example.com/v1
+RERANK_API_KEY=<该重排服务的密钥>
+RERANK_MODEL=<服务商提供的重排模型标识>
+RERANK_ENABLED=true
+RERANK_AUTH_REQUIRED=true
+RERANK_TIMEOUT_MS=15000
+RERANK_CANDIDATES=20
+RERANK_MIN_SCORE=0.05
 ```
 
-之后在「站点管理 → 模型配置 → Embedding 检索」编辑。Embedding 与通用 LLM 的地址、密钥和模型分别维护，没有自动继承关系。保存后不需要重启。清空密钥、停用或者重启，都不会恢复旧启动变量。
+之后在「站点管理 → 模型配置 → Embedding 检索 / Rerank 重排」编辑。这两个服务与通用 LLM 的地址、密钥和模型分别维护，没有自动继承关系。保存后不需要重启。清空密钥、停用或者重启，都不会恢复旧启动变量。
 
-已有数据库首次加入 Embedding 时，也可以从 `EMBEDDING_*` 导入其初始配置；此后通过面板编辑。原有 LLM/JEV/视觉助手配置保持数据库中的值，不重新读取其启动变量。如果未提供 Embedding 启动值，则添加一个停用的空配置。
+已有数据库首次加入某个检索服务时，也可以从相应的 `EMBEDDING_*` 或 `RERANK_*` 导入一次初始配置；原有提供方保持数据库中的值。未提供启动值时，添加一个停用的空配置。
+
+需要认证的服务默认必须填写独立 API Key。如果服务明确无需认证，在面板关闭「服务需要 API Key」或首次启动设置相应 `*_AUTH_REQUIRED=false`。免认证请求不发送 Authorization 头，包括已经保存过旧密钥的情况。切换地址时仍须明确清除旧密钥或提供新密钥。
 
 接口采用 [OpenAI 兼容 Embeddings 格式](https://developers.openai.com/api/reference/resources/embeddings/methods/create)：`POST {baseUrl}/embeddings`，输入为字符串数组，要求返回浮点数向量。维度填 `0` 时不发送 `dimensions`；只有模型明确支持时才指定维度。测试连接会真正校验返回序号、数量、有限数值、非零向量与维度。
+
+重排采用 vLLM 风格 `POST {baseUrl}/rerank`，请求为 `{ model, query, documents, top_n }`，`top_n` 等于候选数。响应必须包含完整的 `results: [{ index, relevance_score }]`，序号不能重复或越界，相关度须为 0—1 的有限数值。返回的文档正文不被使用，出题依据始终取自原资料。后台候选数默认 20，可调整到 5—100；低于最低重排相关度的片段被丢弃。
+
+## 组合与回退
+
+| Embedding | Rerank | 实际检索流程 |
+| --- | --- | --- |
+| 未配置或停用 | 未配置或停用 | BM25 关键词检索 |
+| 可用 | 未配置或停用 | BM25 + 语义检索 → RRF 合并 |
+| 未配置或停用 | 可用 | BM25 → 重排 |
+| 可用 | 可用 | BM25 + 语义检索 → RRF 合并 → 重排 |
+
+Embedding 超时、报错、索引未就绪或响应无效时，保留关键词候选，仍可交给可用的 Rerank。Rerank 超时、报错或响应无效时，保留本次检索原排序；两者同时故障则使用 BM25。每个在线检索模型请求最多等待 7 秒，配置更短超时时遵循更短值；后台建立向量使用配置中的完整超时。Redis 单次读写最多等待 1 秒，缓存故障不会使检索失败。没有候选时不调用重排，没有可访问资料时不调用模型。
+
+没有找到资料依据，或重排过滤后没有相关片段时，显示空结果并拒绝无来源出题。相关度阈值需用自己的模型和资料试查；接口连接成功不代表所有口语问法都能召回。
 
 ## 索引与一致性
 
@@ -31,7 +58,9 @@ EMBEDDING_MIN_SIMILARITY=0.3
 
 索引版本由服务地址、模型、维度和输入格式共同标识，另校验片段内容摘要。切换模型时不会混用旧向量；旧版本留在数据库中供切回原模型使用，属于数据库备份范围。修改密钥、批大小或相关度阈值不会改变向量空间。如果服务商在同一个模型名称下更新模型，请在面板确认「重新生成全部向量」。维度发生变动时，系统拒绝混存不同维度。
 
-问题向量按索引版本与问题摘要缓存五分钟，生产环境使用 Redis 跨副本共享；缓存不包含模型密钥。每次检索仍在数据库过滤资料权限、有效文档和片段摘要，不缓存片段结果，因此删除与权限变化不会被旧缓存遮蔽。
+问题向量按索引版本、重建代号与问题摘要缓存五分钟，生产环境使用 Redis 跨副本共享；缓存不包含模型密钥。强制重建原模型索引也会更新持久化代号，所有副本立即停止使用旧问题向量；跨越重建的在途查询不能把旧问题向量与新资料向量混用。
+
+重排只缓存问题与候选原文对应的排序和分数，期限两分钟；键包含模型、地址和完整候选摘要。每次检索仍重新读取资料权限与有效片段，删除文档、更换候选或模型时不会复用旧排序；调整最低相关度则立即按新阈值过滤缓存分数。单进程缓存最多 128 条，相同请求合并在途模型调用。没有缓存原文检索结果，因此删除与权限变化不会被旧缓存遮蔽。
 
 当前向量存储使用 PostgreSQL 原生数组，查询在数据库计算精确余弦相似度，无需额外服务或扩展，也不将全库向量传给后端进程。这适合小型个人知识库；候选范围内会扫描已就绪向量。资料增长到数十万片段时，应迁移到 pgvector/HNSW 等近邻索引，再评估召回与性能。
 
@@ -44,4 +73,4 @@ EMBEDDING_MIN_SIMILARITY=0.3
 
 Embedding 未配置、索引未完成或服务失败时，仍可按关键词检索；试查界面会显示实际检索方式及回退原因。尚未索引的片段仍参与关键词检索。没有找到资料依据时拒绝出题，不以无来源的模型知识补齐。
 
-`GET /api/kb/search?q=...&limit=5` 返回 `{ items, mode, fallback }`；`mode` 为 `hybrid` 或 `keyword`，回退原因包括 `disabled`、`indexing`、`unavailable`、`empty`。混合结果的 `score` 是 RRF 排名分，`similarity` 是语义余弦相似度。该接口需考生或管理员 JWT，游客不可读取私人资料。
+`GET /api/kb/search?q=...&limit=5` 返回 `{ items, mode, fallback, rerank }`；`mode` 为 `hybrid` 或 `keyword`，Embedding 回退原因包括 `disabled`、`indexing`、`unavailable`、`empty`。`rerank.applied` 表示本次是否使用重排，独立回退原因有 `disabled`、`empty`、`unavailable`。混合结果的 `score` 是 RRF 排名分，`similarity` 是语义余弦相似度，`rerankScore` 是重排相关度。管理面板显示实际模式及两类回退原因。该接口需考生或管理员 JWT，游客不可读取私人资料。

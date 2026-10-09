@@ -22,7 +22,7 @@ export function createApp(bank, service, config, options = {}) {
   const app = express(), auth = createAuth(config);
   const learning = options.learning || new LearningService(bank, service, config, { persist: service.persist });
   const knowledge = options.knowledge || new KnowledgeService(config, { storage: service.storage, persist: service.persist });
-  const aiConfig = options.aiConfig || new AiConfigService(options.runtime ? { ...config, llm: {}, jev: {}, vision: {}, embedding: {} } : config, { storage: service.storage, persist: service.persist });
+  const aiConfig = options.aiConfig || new AiConfigService(options.runtime ? { ...config, llm: {}, jev: {}, vision: {}, embedding: {}, rerank: {} } : config, { storage: service.storage, persist: service.persist });
   const drafts = options.drafts || new DraftService(config, { storage: service.storage, persist: service.persist, llmResolver: () => aiConfig.effectiveLlm() });
   const coach = options.coach || new CoachService(bank, service, config);
   service.storage?.onFailure(() => coach.shutdown());
@@ -47,6 +47,7 @@ export function createApp(bank, service, config, options = {}) {
   const runtime = options.runtime;
   const retrieval = options.retrieval || runtime?.retrieval || new EmbeddingRetrieval(new LocalEmbeddingStore(config, knowledge, { persist: service.persist }), {
     configResolver: async () => aiConfig.effectiveConfig().embedding,
+    rerankResolver: async () => aiConfig.effectiveConfig().rerank,
   });
   app.locals.retrieval = retrieval;
   if (!runtime && service.persist) retrieval.start();
@@ -157,7 +158,8 @@ export function createApp(bank, service, config, options = {}) {
   app.get('/api/kb/search', async (req, res) => {
     await limit(`kb-search:${req.viewer.sub}`, 30, 60000);
     const { knowledge, aiConfig } = await runKb(ctx => ctx, { readOnly: true, retrievalOnly: true });
-    res.json(await retrieval.search(req.query.q, knowledge, { ownerId: 'primary', limit: Number(req.query.limit || 5), config: aiConfig.effectiveConfig().embedding }));
+    const models = aiConfig.effectiveConfig();
+    res.json(await retrieval.search(req.query.q, knowledge, { ownerId: 'primary', limit: Number(req.query.limit || 5), config: models.embedding, rerankConfig: models.rerank }));
   });
   app.get('/api/admin/status', async (_req, res) => {
     const services = {};
@@ -201,7 +203,8 @@ export function createApp(bank, service, config, options = {}) {
   app.post('/api/kb/generate', requireLearner, async (req, res) => {
     await limit('kbgen:primary', 10, 60000);
     const snapshot = await runKb(ctx => { ctx.drafts.validateInput(req.body || {}); return ctx; }, { readOnly: true, retrievalOnly: true });
-    const retrieved = await retrieval.search(req.body.query, snapshot.knowledge, { ownerId: 'primary', config: snapshot.aiConfig.effectiveConfig().embedding });
+    const models = snapshot.aiConfig.effectiveConfig();
+    const retrieved = await retrieval.search(req.body.query, snapshot.knowledge, { ownerId: 'primary', config: models.embedding, rerankConfig: models.rerank });
     const prepared = snapshot.drafts.prepare(req.body || {}, snapshot.knowledge, 'primary', retrieved);
     const text = await snapshot.drafts.complete(prepared.llm, prepared.messages);
     res.json(await runKb(({ drafts }) => drafts.accept(prepared, text)));

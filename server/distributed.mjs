@@ -57,6 +57,7 @@ export class DistributedRuntime {
       await runtime.run(() => {}); // Validate every historical question before serving.
       runtime.retrieval = new EmbeddingRetrieval(new PostgresEmbeddingStore(runtime.pool), {
         configResolver: async () => (await readModelConfig(runtime.pool, config)).embedding,
+        rerankResolver: async () => (await readModelConfig(runtime.pool, config)).rerank,
         redis: runtime.redis, prefix: runtime.prefix,
       });
       if (options.worker !== false) runtime.retrieval.start();

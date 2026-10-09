@@ -169,11 +169,18 @@ test('two stateless backends share durable state, jobs and streams', async t => 
   });
   await t.test('embedding batches share durable leases, cache queries and fence model changes across replicas', async () => {
     for (const runtime of opened) await runtime.retrieval?.close();
-    const d = await make(false), e = await make(false), inputs = [], release = [];
-    let hold = true;
+    const d = await make(false), e = await make(false), inputs = [], rankInputs = [], release = [];
+    let hold = true, rankFailing = false;
     const upstream = http.createServer(async (req, res) => {
       let raw = ''; for await (const part of req) raw += part;
-      const body = JSON.parse(raw); inputs.push(body.input);
+      const body = JSON.parse(raw);
+      if (req.url.endsWith('/rerank')) {
+        assert.equal(req.headers.authorization, undefined);
+        rankInputs.push(body);
+        if (rankFailing) { res.writeHead(503); res.end('{}'); return; }
+        res.end(JSON.stringify({ results: body.documents.map((text, index) => ({ index, relevance_score: text.includes('赶上') ? 0.95 : 0.01 })) })); return;
+      }
+      inputs.push(body.input);
       if (hold) await new Promise(resolve => release.push(resolve));
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ data: body.input.map((text, index) => ({ index, embedding: text.includes('追及') || text.includes('赶上') ? [1, 0] : [0, 1] })) }));
@@ -207,6 +214,31 @@ test('two stateless backends share durable state, jobs and streams', async t => 
       assert.equal(inputs.filter(batch => batch[0] === '追及问题').length, 1);
       assert.equal((await get(e, '/api/admin/rag/status')).status, 403);
       assert.equal((await request(e, '/api/admin/rag/reindex', { method: 'POST', token, body: {} })).status, 403);
+      assert.equal((await request(d, '/api/ai/config', { method: 'PUT', token: admin, body: { provider: 'rerank',
+        baseUrl: `http://127.0.0.1:${upstream.address().port}/v1`, model: 'ranker-model', enabled: true, authRequired: false } })).status, 200);
+      // Real HTTP, durable admin settings and Redis shared by two replicas.
+      for (const embeddingEnabled of [false, true]) for (const rerankEnabled of [false, true]) {
+        await request(d, '/api/ai/config', { method: 'PUT', token: admin, body: { provider: 'embedding', enabled: embeddingEnabled } });
+        await request(d, '/api/ai/config', { method: 'PUT', token: admin, body: { provider: 'rerank', enabled: rerankEnabled } });
+        for (const replica of [d, e]) {
+          const result = await get(replica, '/api/kb/search?q=' + encodeURIComponent('赶上'));
+          assert.equal(result.status, 200); assert.equal(result.data.mode, embeddingEnabled ? 'hybrid' : 'keyword');
+          assert.equal(result.data.rerank.applied, rerankEnabled); assert.equal(result.data.items[0].document.id, document.id);
+        }
+      }
+      assert.equal(rankInputs.length, 1); assert.ok(rankInputs.every(input => input.documents.every(text => !text.includes('私密'))));
+      const generationBefore = (await request(e, '/api/admin/rag/status', { token: admin })).data.generation;
+      assert.equal((await request(d, '/api/admin/rag/reindex', { method: 'POST', token: admin, body: { force: true } })).status, 200);
+      for (let i = 0; i < 8; i++) await Promise.all([d.runtime.retrieval.tick(), e.runtime.retrieval.tick()]);
+      const rebuilt = (await request(e, '/api/admin/rag/status', { token: admin })).data;
+      assert.notEqual(rebuilt.generation, generationBefore); assert.equal(rebuilt.ready, rebuilt.total);
+      await get(d, '/api/kb/search?q=' + encodeURIComponent('赶上')); await get(e, '/api/kb/search?q=' + encodeURIComponent('赶上'));
+      assert.equal(inputs.filter(batch => batch[0] === '赶上').length, 2);
+      rankFailing = true;
+      const failedRank = await get(e, '/api/kb/search?q=' + encodeURIComponent('赶上前车'));
+      assert.equal(failedRank.data.mode, 'hybrid'); assert.equal(failedRank.data.rerank.fallback, 'unavailable');
+      assert.equal(failedRank.data.items[0].document.id, document.id); rankFailing = false;
+      await request(d, '/api/ai/config', { method: 'PUT', token: admin, body: { provider: 'rerank', enabled: false } });
       await request(d, `/api/kb/libraries/${library.id}/documents/${document.id}`, { method: 'DELETE', token });
       assert.equal((await d.runtime.pool.query('SELECT count(*)::int AS count FROM study_kb_embeddings WHERE document_id=$1', [document.id])).rows[0].count, 0);
       await e.runtime.retrieval.close();

@@ -26,6 +26,8 @@ const env = {
   SEAWEEDFS_CONFIG_FILE: './' + path.relative(process.cwd(), configFile),
   LLM_BASE_URL: '', LLM_API_KEY: '', LLM_MODEL: '', LLM_VISION: 'false', JEV_API_KEY: '', TYPESAFE_API_KEY: '', VISION_API_KEY: '',
   EMBEDDING_BASE_URL: '', EMBEDDING_API_KEY: '', EMBEDDING_MODEL: '', EMBEDDING_ENABLED: 'false',
+  EMBEDDING_AUTH_REQUIRED: 'true',
+  RERANK_BASE_URL: '', RERANK_API_KEY: '', RERANK_MODEL: '', RERANK_ENABLED: 'false', RERANK_AUTH_REQUIRED: 'true',
 };
 fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
 fs.writeFileSync(configFile, JSON.stringify({ identities: [

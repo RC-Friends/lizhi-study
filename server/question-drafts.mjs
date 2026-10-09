@@ -109,7 +109,7 @@ export class DraftService {
     const keys = sources.map((_, index) => `K${index + 1}`);
     const materials = sources.map((chunk, index) => `[K${index + 1}] 《${chunk.document.title}》· ${chunk.anchor}\n${chunk.text}`).join('\n\n');
     const llm = { ...this.llmResolver(), maxTokens: Math.max(this.llmResolver()?.maxTokens || 0, 4096) };
-    return { llm, messages: buildPrompt(query, module, count, materials), count, module, sources, keys, retrieval: retrieved ? { mode: retrieved.mode, fallback: retrieved.fallback } : { mode: 'keyword', fallback: 'disabled' } };
+    return { llm, messages: buildPrompt(query, module, count, materials), count, module, sources, keys, retrieval: retrieved ? { mode: retrieved.mode, fallback: retrieved.fallback, rerank: retrieved.rerank } : { mode: 'keyword', fallback: 'disabled' } };
   }
   accept({ count, module, sources, keys, retrieval }, text) {
     const parsed = parseQuestions(text);

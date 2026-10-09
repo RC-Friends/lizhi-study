@@ -4,6 +4,9 @@ import crypto from 'node:crypto';
 import { embeddingText } from './embeddings.mjs';
 
 export const EMBEDDING_SCHEMA = `
+CREATE TABLE IF NOT EXISTS study_kb_embedding_indexes (
+  index_key text PRIMARY KEY, generation text NOT NULL
+);
 CREATE TABLE IF NOT EXISTS study_kb_embeddings (
   index_key text NOT NULL, document_id text NOT NULL REFERENCES study_kb_documents(id) ON DELETE CASCADE,
   chunk_index integer NOT NULL CHECK(chunk_index>=0), text_hash text NOT NULL,
@@ -23,14 +26,22 @@ const access = "(l.owner_id=$2 OR l.payload->>'visibility'='public') AND ($3::te
 export class PostgresEmbeddingStore {
   constructor(pool) { this.pool = pool; }
   async sync(key, { force = false, retry = false } = {}) {
-    await this.pool.query(`INSERT INTO study_kb_embeddings(index_key,document_id,chunk_index,text_hash)
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN'); await client.query('SELECT pg_advisory_xact_lock(1937012089,9)');
+      await client.query('INSERT INTO study_kb_embedding_indexes(index_key,generation) VALUES($1,$2) ON CONFLICT(index_key) DO NOTHING', [key, crypto.randomUUID()]);
+      if (force) await client.query('UPDATE study_kb_embedding_indexes SET generation=$2 WHERE index_key=$1', [key, crypto.randomUUID()]);
+      await client.query(`INSERT INTO study_kb_embeddings(index_key,document_id,chunk_index,text_hash)
       SELECT $1,d.id,(c.ordinality-1)::int,md5((d.payload->>'title') || E'\\n' || (c.value->>'anchor') || E'\\n' || (c.value->>'text'))
       FROM study_kb_documents d CROSS JOIN LATERAL jsonb_array_elements(d.payload->'chunks') WITH ORDINALITY c(value,ordinality)
       WHERE d.payload->>'format'<>'image'
       ON CONFLICT(index_key,document_id,chunk_index) DO UPDATE SET text_hash=EXCLUDED.text_hash,status='queued',embedding=NULL,
         worker=NULL,lease_until=NULL,attempts=0,retry_at=NULL,error=NULL,updated_at=now()
       WHERE study_kb_embeddings.text_hash<>EXCLUDED.text_hash OR $2::boolean`, [key, force]);
-    if (retry) await this.pool.query("UPDATE study_kb_embeddings SET status='queued',attempts=0,retry_at=NULL,error=NULL WHERE index_key=$1 AND status='failed'", [key]);
+      if (retry) await client.query("UPDATE study_kb_embeddings SET status='queued',attempts=0,retry_at=NULL,error=NULL WHERE index_key=$1 AND status='failed'", [key]);
+      await client.query('COMMIT');
+    } catch (error) { await client.query('ROLLBACK').catch(() => {}); throw error; }
+    finally { client.release(); }
   }
   async claim(key, count, worker, leaseMs) {
     const result = await this.pool.query(`WITH picked AS (
@@ -70,24 +81,26 @@ export class PostgresEmbeddingStore {
   }
   async status(key, { ownerId = 'primary', libraryIds = null } = {}) {
     const values = [key, ownerId, libraryIds];
+    const generation = (await this.pool.query('SELECT generation FROM study_kb_embedding_indexes WHERE index_key=$1', [key])).rows[0]?.generation || 'initial';
     const total = (await this.pool.query(`SELECT COALESCE(sum(jsonb_array_length(d.payload->'chunks')),0)::int AS total
       FROM study_kb_documents d JOIN study_kb_libraries l ON l.id=d.library_id WHERE ${access.replaceAll('$2', '$1').replaceAll('$3', '$2')}`, [ownerId, libraryIds])).rows[0].total;
     const counts = (await this.pool.query(`SELECT e.status,count(*)::int AS count FROM study_kb_embeddings e
       JOIN study_kb_documents d ON d.id=e.document_id JOIN study_kb_libraries l ON l.id=d.library_id
       WHERE e.index_key=$1 AND ${matchesText} AND ${access} GROUP BY e.status`, values)).rows;
-    const result = { total, ready: 0, queued: 0, working: 0, failed: 0 };
+    const result = { generation, total, ready: 0, queued: 0, working: 0, failed: 0 };
     for (const row of counts) result[row.status] = row.count;
     result.queued += Math.max(0, total - result.ready - result.queued - result.working - result.failed);
     return result;
   }
-  async search(key, vector, { ownerId, libraryIds, limit, minSimilarity }) {
+  async search(key, vector, { ownerId, libraryIds, limit, minSimilarity, generation }) {
     const result = await this.pool.query(`SELECT d.library_id,d.id,d.payload->>'title' AS title,e.chunk_index,
       d.payload->'chunks'->e.chunk_index AS chunk,s.score
       FROM study_kb_embeddings e JOIN study_kb_documents d ON d.id=e.document_id JOIN study_kb_libraries l ON l.id=d.library_id
       CROSS JOIN LATERAL (SELECT sum(v.document_value*v.query_value) AS score FROM unnest(e.embedding,$4::double precision[]) v(document_value,query_value)) s
       WHERE e.index_key=$1 AND e.status='ready' AND cardinality(e.embedding)=cardinality($4::double precision[])
         AND ${matchesText} AND ${access} AND s.score >= $5
-      ORDER BY s.score DESC,d.id,e.chunk_index LIMIT $6`, [key, ownerId, libraryIds, vector, minSimilarity, limit]);
+        AND ($7::text IS NULL OR COALESCE((SELECT generation FROM study_kb_embedding_indexes WHERE index_key=$1),'initial')=$7)
+      ORDER BY s.score DESC,d.id,e.chunk_index LIMIT $6`, [key, ownerId, libraryIds, vector, minSimilarity, limit, generation || null]);
     return result.rows.map(row => ({ libraryId: row.library_id, document: { id: row.id, title: row.title },
       index: row.chunk_index, anchor: row.chunk.anchor, text: row.chunk.text, score: Math.min(1, row.score) }));
   }
@@ -96,18 +109,19 @@ export class PostgresEmbeddingStore {
 // Development compatibility only. Production vectors and leases live in PostgreSQL.
 export class LocalEmbeddingStore {
   constructor(config, knowledge, { persist = true, clock = Date.now } = {}) {
-    this.knowledge = knowledge; this.persist = persist; this.clock = clock; this.rows = new Map();
+    this.knowledge = knowledge; this.persist = persist; this.clock = clock; this.rows = new Map(); this.generations = new Map();
     this.filename = path.join(path.dirname(config.runtimePath), 'kb-embeddings.json');
     if (persist && fs.existsSync(this.filename)) {
       const saved = JSON.parse(fs.readFileSync(this.filename, 'utf8'));
       if (saved.version !== 1 || !Array.isArray(saved.rows)) throw new Error('知识库向量文件无法读取。');
       for (const row of saved.rows) this.rows.set(row.id, row);
+      this.generations = new Map(Object.entries(saved.generations || {}));
     }
   }
   save() {
     if (!this.persist) return;
     fs.mkdirSync(path.dirname(this.filename), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(this.filename + '.tmp', JSON.stringify({ version: 1, rows: [...this.rows.values()] }), { mode: 0o600 });
+    fs.writeFileSync(this.filename + '.tmp', JSON.stringify({ version: 1, rows: [...this.rows.values()], generations: Object.fromEntries(this.generations) }), { mode: 0o600 });
     fs.renameSync(this.filename + '.tmp', this.filename);
   }
   entries() {
@@ -117,6 +131,7 @@ export class LocalEmbeddingStore {
     })));
   }
   async sync(key, { force = false, retry = false } = {}) {
+    if (force || !this.generations.has(key)) this.generations.set(key, crypto.randomUUID());
     const entries = this.entries(), valid = new Set(entries.map(entry => `${entry.document_id}:${entry.chunk_index}`));
     for (const [id, row] of this.rows) if (!valid.has(`${row.document_id}:${row.chunk_index}`)) this.rows.delete(id);
     for (const entry of entries) {
@@ -155,14 +170,15 @@ export class LocalEmbeddingStore {
   async status(key, { ownerId = 'primary', libraryIds = null } = {}) {
     const allowed = this.knowledge.accessibleLibraryIds(ownerId).filter(id => !libraryIds || libraryIds.includes(id));
     const entries = this.entries().filter(entry => allowed.includes(entry.document.libraryId));
-    const result = { total: entries.length, ready: 0, queued: 0, working: 0, failed: 0 };
+    const result = { generation: this.generations.get(key) || 'initial', total: entries.length, ready: 0, queued: 0, working: 0, failed: 0 };
     for (const entry of entries) {
       const row = this.rows.get(`${key}:${entry.document_id}:${entry.chunk_index}`);
       result[row?.text_hash === entry.text_hash ? row.status : 'queued']++;
     }
     return result;
   }
-  async search(key, vector, { ownerId, libraryIds, limit, minSimilarity }) {
+  async search(key, vector, { ownerId, libraryIds, limit, minSimilarity, generation }) {
+    if (generation && generation !== (this.generations.get(key) || 'initial')) return [];
     const allowed = this.knowledge.accessibleLibraryIds(ownerId).filter(id => !libraryIds || libraryIds.includes(id));
     return this.entries().filter(entry => allowed.includes(entry.document.libraryId)).flatMap(entry => {
       const row = this.rows.get(`${key}:${entry.document_id}:${entry.chunk_index}`);

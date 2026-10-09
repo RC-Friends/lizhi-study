@@ -122,3 +122,24 @@ test('hard chunk bounds apply to unpunctuated text and RRF merges both sources d
   const result = fuseRankings([a, b], [b, a]); assert.equal(result.length, 2); assert.deepEqual(result[0].retrieval, ['keyword', 'semantic']);
   assert.equal(fuseRankings([a], [b])[0].document.id, 'b');
 });
+
+test('same-name model rebuild invalidates query vectors and fences queries already in flight', async t => {
+  const { knowledge, document } = fixture(), store = new LocalEmbeddingStore(config, knowledge, { persist: false });
+  let rotated = false, gate, entered;
+  const retrieval = new EmbeddingRetrieval(store, { configResolver: async () => model, embed: async (_cfg, inputs) => {
+    const values = inputs.map(text => { const vector = vectorFor(text); return rotated ? [vector[1], vector[0], vector[2]] : vector; });
+    if (gate && inputs[0] === '追及新问法') { entered(); await gate; }
+    return values;
+  } }); t.after(() => retrieval.close());
+  await retrieval.tick(); await retrieval.tick();
+  assert.equal((await retrieval.search('追及问题', knowledge, { ownerId: 'primary' })).items[0].document.id, document.id);
+  const before = (await store.status(embeddingIndexKey(model))).generation;
+  rotated = true; await retrieval.refresh({ force: true }); await retrieval.tick(); await retrieval.tick();
+  assert.notEqual((await store.status(embeddingIndexKey(model))).generation, before);
+  // An old cached vector would now retrieve chemistry rather than the formula.
+  assert.equal((await retrieval.search('追及问题', knowledge, { ownerId: 'primary' })).items[0].document.id, document.id);
+  let release; gate = new Promise(resolve => { release = resolve; }); const requested = new Promise(resolve => { entered = resolve; });
+  const pending = retrieval.search('追及新问法', knowledge, { ownerId: 'primary' }); await requested;
+  rotated = false; await store.sync(embeddingIndexKey(model), { force: true }); await retrieval.tick(); await retrieval.tick();
+  release(); const oldQuery = await pending; assert.equal(oldQuery.items.length, 0);
+});

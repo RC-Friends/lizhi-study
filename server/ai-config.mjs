@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { HttpError } from './bank.mjs';
 import { streamCompletion } from './providers.mjs';
 import { createEmbeddings } from './embeddings.mjs';
+import { rerankDocuments } from './rerank.mjs';
 
 const PRESETS = {
   deepseek: { baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
@@ -16,7 +17,8 @@ export const MODEL_DEFAULTS = {
     reasoningEffort: '', thinking: '', imageMaxTokens: 32768, imageToolMaxTokens: 8192, imageTimeout: 300000, maxRetryTokens: 65536 },
   jev: { baseUrl: 'https://api.typesafe.ai/v1', apiKey: '', model: 'jev-latest', enabled: true, timeout: 45000 },
   vision: { baseUrl: '', apiKey: '', model: '', enabled: false, timeout: 180000, maxTokens: 8192, reasoningEffort: '', thinking: '' },
-  embedding: { baseUrl: '', apiKey: '', model: '', enabled: false, timeout: 30000, batchSize: 16, dimensions: 0, minSimilarity: 0.3 },
+  embedding: { baseUrl: '', apiKey: '', model: '', enabled: false, authRequired: true, timeout: 30000, batchSize: 16, dimensions: 0, minSimilarity: 0.3 },
+  rerank: { baseUrl: '', apiKey: '', model: '', enabled: false, authRequired: true, timeout: 15000, candidates: 20, minScore: 0.05 },
 };
 const own = (object, key) => Object.hasOwn(object, key);
 const providerDefaults = (name, source = {}) => Object.fromEntries(Object.entries(MODEL_DEFAULTS[name])
@@ -30,9 +32,9 @@ function validateProvider(provider, value) {
   for (const [key, fallback] of Object.entries(MODEL_DEFAULTS[provider])) {
     if (typeof value[key] !== typeof fallback) throw new HttpError(400, `模型参数 ${key} 的类型无效。`);
     if (typeof fallback === 'number') {
-      const bounds = { batchSize: [1, 64], dimensions: [0, 8192], minSimilarity: [-1, 1] }[key]
+      const bounds = { batchSize: [1, 64], dimensions: [0, 8192], minSimilarity: [-1, 1], candidates: [5, 100], minScore: [0, 1] }[key]
         || (key.toLowerCase().includes('timeout') ? [1000, 600000] : [64, 131072]);
-      if (!(key === 'minSimilarity' ? Number.isFinite(value[key]) : Number.isSafeInteger(value[key])) || value[key] < bounds[0] || value[key] > bounds[1]) throw new HttpError(400, `模型参数 ${key} 超出允许范围。`);
+      if (!(['minSimilarity', 'minScore'].includes(key) ? Number.isFinite(value[key]) : Number.isSafeInteger(value[key])) || value[key] < bounds[0] || value[key] > bounds[1]) throw new HttpError(400, `模型参数 ${key} 超出允许范围。`);
     }
   }
   if (!validUrl(value.baseUrl) || value.baseUrl.length > 2048) throw new HttpError(400, '服务地址须为不含账号、查询参数或片段的 http(s) 地址。');
@@ -59,15 +61,18 @@ export function initialModelSettings(config, legacy = null) {
   return validateAiConfig({ version: 2, revision: crypto.randomUUID(), updatedAt: new Date().toISOString(), providers });
 }
 function upgradeModelSettings(value, config) {
-  if (value?.providers?.embedding) return validateAiConfig(value);
-  // A newly introduced provider bootstraps once. Existing LLM/JEV/vision
-  // settings stay database-owned and are never merged with environment values.
-  return validateAiConfig({ ...value, revision: crypto.randomUUID(), providers: { ...value.providers, embedding: providerDefaults('embedding', config.embedding) } });
+  const providers = { ...value.providers }; let changed = false;
+  for (const name of ['embedding', 'rerank']) {
+    if (!providers[name]) { providers[name] = providerDefaults(name, config[name]); changed = true; }
+    else if (!own(providers[name], 'authRequired')) { providers[name] = { ...providers[name], authRequired: true }; changed = true; }
+  }
+  // New providers bootstrap once; existing provider values remain DB-owned.
+  return validateAiConfig(changed ? { ...value, revision: crypto.randomUUID(), providers } : value);
 }
 export async function bootstrapModelSettings(client, config) {
   const row = (await client.query("SELECT payload FROM study_ai_config WHERE id='platform'")).rows[0];
-  if (row?.payload?.version === 2 && row.payload.providers?.embedding) { validateAiConfig(row.payload); return; }
   const value = row?.payload?.version === 2 ? upgradeModelSettings(row.payload, config) : initialModelSettings(config, row?.payload);
+  if (value === row?.payload) return;
   await client.query("INSERT INTO study_ai_config(id,payload) VALUES('platform',$1::jsonb) ON CONFLICT(id) DO UPDATE SET payload=EXCLUDED.payload", [JSON.stringify(value)]);
 }
 export function applyModelSettings(config, value) {
@@ -98,7 +103,7 @@ export class AiConfigService {
       catch { throw new Error('AI 配置文件无法读取；为避免覆盖原配置，请先检查 ai-config.json。'); }
     }
     this.stored = saved?.version === 2 ? upgradeModelSettings(saved, config) : initialModelSettings(config, saved);
-    if (persist && !storage && !saved?.providers?.embedding) this.save();
+    if (persist && !storage && this.stored !== saved) this.save();
   }
   effectiveConfig() { return applyModelSettings(this.config, this.stored); }
   effectiveLlm() { return this.effectiveConfig().llm; }
@@ -141,12 +146,16 @@ export class AiConfigService {
   }
   async test(input = {}) {
     const { provider, next } = this.patched(input);
-    if (!next.baseUrl || !next.apiKey || !next.model) throw new HttpError(400, '请先填写服务地址、API Key 与模型名称。');
+    if (!next.baseUrl || (next.authRequired !== false && !next.apiKey) || !next.model) throw new HttpError(400, '请先填写服务地址、模型名称与服务需要的 API Key。');
     const started = Date.now();
     try {
       if (provider === 'embedding') {
         const [vector] = await createEmbeddings({ ...next, key: next.apiKey, timeout: 20000 }, ['相向而行时，相遇时间等于距离除以速度和。']);
         return { ok: true, latencyMs: Date.now() - started, reply: `向量接口已响应 · ${vector.length} 维` };
+      }
+      if (provider === 'rerank') {
+        const ranking = await rerankDocuments({ ...next, key: next.apiKey, timeout: 20000 }, '追及时间怎么计算？', ['追及时间等于路程差除以速度差。', '金属生锈是一种氧化现象。']);
+        return { ok: true, latencyMs: Date.now() - started, reply: `重排接口已响应 · 校验 ${ranking.length} 个片段` };
       }
       if (provider === 'jev') {
         const response = await fetch(`${next.baseUrl}/systemone`, { method: 'POST', headers: { Authorization: `Bearer ${next.apiKey}`, 'Content-Type': 'application/json' },
