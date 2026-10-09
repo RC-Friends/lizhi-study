@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chunkDocument, KnowledgeService, tokenize } from '../../server/knowledge.mjs';
+import { KnowledgeService } from '../../server/knowledge.mjs';
+import { chunkDocument, tokenize } from '../../server/kb-text.mjs';
 
 const owner = 'primary', stranger = 'someone';
 const lecture = { title: '讲义', format: 'markdown', content: '# 第一章 基础\n\n基础内容第一段。\n\n基础内容第二段。\n\n## 第二章 进阶\n\n进阶内容，讲方程与代入消元。' };

@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { HttpError, MODULES } from './bank.mjs';
+import { validateDraft } from './knowledge-validation.mjs';
+export { validateDraft } from './knowledge-validation.mjs';
 import { streamCompletion } from './providers.mjs';
 
 const DRAFT_LIMITS = { count: 10, total: 200 };
@@ -39,18 +41,6 @@ function normalizeDraft(raw, sources) {
   if (stem.length < 8 || stem.length > 500 || !OPTION_KEYS.includes(answer) || !analysis) return null;
   const source = sources.includes(raw.source) ? raw.source : sources[0];
   return { stem, options, answer, analysis, knowledgePoints, source };
-}
-
-export function validateDraft(draft) {
-  if (!draft || typeof draft.id !== 'string' || !draft.id || !['draft', 'confirmed', 'swapped'].includes(draft.status)
-    || (draft.module !== null && !MODULES.includes(draft.module)) || typeof draft.stem !== 'string' || !draft.stem
-    || typeof draft.answer !== 'string' || !OPTION_KEYS.includes(draft.answer)
-    || typeof draft.options !== 'object' || draft.options === null
-    || OPTION_KEYS.some(key => typeof draft.options[key] !== 'string' || !draft.options[key])
-    || typeof draft.analysis !== 'string' || !draft.analysis
-    || !Array.isArray(draft.knowledgePoints) || typeof draft.source !== 'object' || draft.source === null
-    || !Number.isFinite(Date.parse(draft.createdAt))) throw new Error('AI 出题草稿结构无效。');
-  return draft;
 }
 
 export class DraftService {

@@ -32,3 +32,4 @@ data/raw/*
 # Existing private-cluster rollout files are local operator notes, not portable deployment inputs.
 deploy/k8s/
 deploy/local/
+docs/PRD-v0.3-multiuser-ai.pdf

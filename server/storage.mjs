@@ -1,6 +1,5 @@
 import pg from 'pg';
-import { validateKnowledge, validateLibrary } from './knowledge.mjs';
-import { validateDraft } from './question-drafts.mjs';
+import { validateKnowledge, validateLibrary, validateDraft } from './knowledge-validation.mjs';
 
 export class StorageError extends Error {
   constructor(message = '数据库暂时不可用，请稍后重试。', code = 'storage_unavailable') {
