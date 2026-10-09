@@ -24,6 +24,6 @@ for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, async () => {
   if (stopping) return; stopping = true;
   server.close(); service.shutdown(); app.locals.coach.shutdown();
   const deadline = setTimeout(() => process.exit(1), 20000); deadline.unref();
-  try { await runtime?.close(); await service.flush(); resources?.close(); process.exit(0); }
+  try { await app.locals.retrieval.close(); await runtime?.close(); await service.flush(); resources?.close(); process.exit(0); }
   catch { resources?.close(); process.exit(1); }
 });

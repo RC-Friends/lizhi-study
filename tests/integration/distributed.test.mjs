@@ -2,11 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import crypto from 'node:crypto';
+import http from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
 import { DistributedRuntime } from '../../server/distributed.mjs';
 import { MatchService } from '../../server/matches.mjs';
 import { QuestionBank } from '../../server/bank.mjs';
 import { createApp } from '../../server/app.mjs';
+import { runKnowledge } from '../../server/knowledge-runtime.mjs';
+import { embeddingIndexKey } from '../../server/embeddings.mjs';
 import { config, question, settings, result } from '../web/fixtures.mjs';
 
 for (const name of ['TEST_DATABASE_URL','TEST_REDIS_URL']) {
@@ -163,5 +166,61 @@ test('two stateless backends share durable state, jobs and streams', async t => 
     opened.push(restarted);
     assert.equal(await restarted.withQuestions(({ config }) => config.llm.model), 'panel-configured-model');
     assert.equal(await restarted.withQuestions(({ config }) => config.llm.key), 'panel-configured-secret');
+  });
+  await t.test('embedding batches share durable leases, cache queries and fence model changes across replicas', async () => {
+    for (const runtime of opened) await runtime.retrieval?.close();
+    const d = await make(false), e = await make(false), inputs = [], release = [];
+    let hold = true;
+    const upstream = http.createServer(async (req, res) => {
+      let raw = ''; for await (const part of req) raw += part;
+      const body = JSON.parse(raw); inputs.push(body.input);
+      if (hold) await new Promise(resolve => release.push(resolve));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ data: body.input.map((text, index) => ({ index, embedding: text.includes('追及') || text.includes('赶上') ? [1, 0] : [0, 1] })) }));
+    }); upstream.listen(0, '127.0.0.1'); await once(upstream, 'listening');
+    const admin = (await request(d, '/api/login', { method: 'POST', body: { role: 'admin', password: configuration.adminPassword } })).data.token;
+    try {
+      const library = (await post(d, '/api/kb/libraries', { name: '向量验收笔记' })).data;
+      const document = (await post(d, `/api/kb/libraries/${library.id}/documents`, { title: '车辆笔记', format: 'text', content: '同向行驶时，赶上的时刻用初始间隔除以快慢差。' })).data.document;
+      await post(d, `/api/kb/libraries/${library.id}/documents`, { title: '化学笔记', format: 'text', content: '生锈是一种缓慢氧化现象。' });
+      await runKnowledge(d.runtime, configuration, ({ knowledge }) => {
+        const privateLibrary = knowledge.createLibrary({ name: '另一个人的资料' }, 'other-owner');
+        return knowledge.upload({ libraryId: privateLibrary.id, title: '私密车辆材料', format: 'text', content: '赶上前车的私密公式。' }, 'other-owner');
+      });
+      const changed = await request(d, '/api/ai/config', { method: 'PUT', token: admin, body: { provider: 'embedding',
+        baseUrl: `http://127.0.0.1:${upstream.address().port}/v1`, apiKey: 'integration-embedding-key', model: 'semantic-model', enabled: true, batchSize: 1 } });
+      assert.equal(changed.status, 200);
+      await waitFor(() => inputs.length === 1);
+      const second = e.runtime.retrieval.tick(); await waitFor(() => inputs.length === 2);
+      // Neither request owns a transaction or blocks ordinary learner writes.
+      assert.equal((await request(e, '/api/learning/profile', { method: 'PATCH', token, body: { nickname: '向量检索同学' } })).status, 200);
+      assert.notEqual(inputs[0][0], inputs[1][0]); hold = false; release.splice(0).forEach(resolve => resolve());
+      await second; await d.runtime.retrieval.tick();
+      for (let i = 0; i < 8; i++) await Promise.all([d.runtime.retrieval.tick(), e.runtime.retrieval.tick()]);
+      const status = (await request(e, '/api/admin/rag/status', { token: admin })).data;
+      assert.equal(status.ready, status.total); assert.equal(status.total, 3);
+      const chunkInputs = inputs.flat(); assert.equal(new Set(chunkInputs).size, chunkInputs.length);
+      const found = await get(e, '/api/kb/search?q=' + encodeURIComponent('追及问题'));
+      assert.equal(found.status, 200); assert.equal(found.data.mode, 'hybrid'); assert.equal(found.data.items[0].document.id, document.id);
+      assert.ok(found.data.items.every(item => item.document.title !== '私密车辆材料'));
+      await get(d, '/api/kb/search?q=' + encodeURIComponent('追及问题'));
+      assert.equal(inputs.filter(batch => batch[0] === '追及问题').length, 1);
+      assert.equal((await get(e, '/api/admin/rag/status')).status, 403);
+      assert.equal((await request(e, '/api/admin/rag/reindex', { method: 'POST', token, body: {} })).status, 403);
+      await request(d, `/api/kb/libraries/${library.id}/documents/${document.id}`, { method: 'DELETE', token });
+      assert.equal((await d.runtime.pool.query('SELECT count(*)::int AS count FROM study_kb_embeddings WHERE document_id=$1', [document.id])).rows[0].count, 0);
+      await e.runtime.retrieval.close();
+      const update = await request(e, '/api/ai/config', { method: 'PUT', token: admin, body: { provider: 'embedding', model: 'new-vector-space' } }); assert.equal(update.status, 200);
+      assert.equal((await get(e, '/api/kb/search?q=' + encodeURIComponent('追及问题'))).data.fallback, 'indexing');
+      const restarted = await DistributedRuntime.open(bank, { ...configuration, embedding: { enabled: true, key: 'stale-environment-key', model: 'stale-environment-model' } }, { worker: false }); opened.push(restarted);
+      assert.equal(await restarted.withQuestions(({ config }) => config.embedding.model), 'new-vector-space');
+      assert.equal(await restarted.withQuestions(({ config }) => config.embedding.key), 'integration-embedding-key');
+      const settings = await restarted.withQuestions(({ config }) => config.embedding), key = embeddingIndexKey(settings), store = restarted.retrieval.store;
+      await store.sync(key); const oldLease = await store.claim(key, 1, 'expired-worker', 1000);
+      await restarted.pool.query("UPDATE study_kb_embeddings SET lease_until=now()-interval '1 second' WHERE index_key=$1 AND worker='expired-worker'", [key]);
+      const newLease = await store.claim(key, 1, 'replacement-worker', 1000);
+      await store.complete(key, oldLease, [[1, 0]], 'expired-worker'); assert.equal((await store.status(key)).ready, 0);
+      await store.complete(key, newLease, [[0, 1]], 'replacement-worker'); assert.equal((await store.status(key)).ready, 1);
+    } finally { hold = false; release.splice(0).forEach(resolve => resolve()); upstream.closeAllConnections(); await new Promise(resolve => upstream.close(resolve)); }
   });
 });

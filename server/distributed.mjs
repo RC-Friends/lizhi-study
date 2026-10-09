@@ -8,6 +8,8 @@ import { HttpError } from './bank.mjs';
 import { SCHEMA, MATCH_UPSERT, matchValues, validateMatch, validateLearning, StorageError } from './storage.mjs';
 import { runLlm, runJev, runDemo, ProviderError } from './providers.mjs';
 import { bootstrapModelSettings, readModelConfig } from './ai-config.mjs';
+import { EmbeddingRetrieval } from './embeddings.mjs';
+import { EMBEDDING_SCHEMA, PostgresEmbeddingStore } from './embedding-store.mjs';
 
 const LOCK = 'SELECT pg_advisory_xact_lock(1937012089, 2)';
 const JOB_SCHEMA = `
@@ -38,9 +40,12 @@ export class DistributedRuntime {
       await runtime.transaction(async client => {
         const compatible = await client.query('SELECT pg_try_advisory_xact_lock(1937012089, 1) AS acquired');
         if (!compatible.rows[0].acquired) throw new StorageError('旧版单进程应用或导入程序仍在运行，请先停止它。');
+        // Bootstrap upgrades and panel writes share a lock, acquired before DDL
+        // to avoid racing a saved model or deadlocking a knowledge writer.
+        await client.query('SELECT pg_advisory_xact_lock(1937012089, 8)');
         const versions = await client.query("SELECT to_regclass('study_schema_migrations') AS name");
         if (versions.rows[0].name && (await client.query('SELECT max(version) AS version FROM study_schema_migrations')).rows[0].version > 3) throw new StorageError('数据库版本高于当前应用。');
-        await client.query(SCHEMA); await client.query(JOB_SCHEMA);
+        await client.query(SCHEMA); await client.query(JOB_SCHEMA); await client.query(EMBEDDING_SCHEMA);
         await bootstrapModelSettings(client, config);
         if (runtime.resourceManager) await client.query('UPDATE study_state SET resource_version=COALESCE(resource_version,$1) WHERE id=1', [config.resourceVersion]);
       });
@@ -50,6 +55,11 @@ export class DistributedRuntime {
         for (const callback of runtime.listeners.get(message) || []) callback();
       });
       await runtime.run(() => {}); // Validate every historical question before serving.
+      runtime.retrieval = new EmbeddingRetrieval(new PostgresEmbeddingStore(runtime.pool), {
+        configResolver: async () => (await readModelConfig(runtime.pool, config)).embedding,
+        redis: runtime.redis, prefix: runtime.prefix,
+      });
+      if (options.worker !== false) runtime.retrieval.start();
       if (options.worker !== false) runtime.startWorker();
       return runtime;
     } catch (error) { await runtime.close(); if (error instanceof StorageError) throw error; throw new StorageError('无法启动后端，请检查 PostgreSQL、Redis 和题库版本配置。'); }
@@ -344,6 +354,7 @@ export class DistributedRuntime {
   }
   async close() {
     if (this.closed) return; this.closed = true; clearInterval(this.timer);
+    await this.retrieval?.close();
     for (const { controller } of this.tasks.values()) controller.abort();
     await Promise.allSettled([...this.tasks.values()].map(task => task.task));
     for (const client of [this.subscriber, this.redis]) if (client.isOpen) client.destroy();

@@ -6,9 +6,11 @@ import { HttpError } from './bank.mjs';
 import { createAuth } from './auth.mjs';
 import { LearningService } from './learning.mjs';
 import { KnowledgeService } from './knowledge.mjs';
-import { DraftService, completeDraft } from './question-drafts.mjs';
+import { DraftService } from './question-drafts.mjs';
 import { runKnowledge } from './knowledge-runtime.mjs';
 import { AiConfigService } from './ai-config.mjs';
+import { EmbeddingRetrieval } from './embeddings.mjs';
+import { LocalEmbeddingStore } from './embedding-store.mjs';
 import { CoachService } from './coach.mjs';
 import { ProviderError } from './providers.mjs';
 import { defaultImagesPath } from './resources.mjs';
@@ -20,7 +22,7 @@ export function createApp(bank, service, config, options = {}) {
   const app = express(), auth = createAuth(config);
   const learning = options.learning || new LearningService(bank, service, config, { persist: service.persist });
   const knowledge = options.knowledge || new KnowledgeService(config, { storage: service.storage, persist: service.persist });
-  const aiConfig = options.aiConfig || new AiConfigService(options.runtime ? { ...config, llm: {}, jev: {}, vision: {} } : config, { storage: service.storage, persist: service.persist });
+  const aiConfig = options.aiConfig || new AiConfigService(options.runtime ? { ...config, llm: {}, jev: {}, vision: {}, embedding: {} } : config, { storage: service.storage, persist: service.persist });
   const drafts = options.drafts || new DraftService(config, { storage: service.storage, persist: service.persist, llmResolver: () => aiConfig.effectiveLlm() });
   const coach = options.coach || new CoachService(bank, service, config);
   service.storage?.onFailure(() => coach.shutdown());
@@ -43,6 +45,11 @@ export function createApp(bank, service, config, options = {}) {
     next();
   });
   const runtime = options.runtime;
+  const retrieval = options.retrieval || runtime?.retrieval || new EmbeddingRetrieval(new LocalEmbeddingStore(config, knowledge, { persist: service.persist }), {
+    configResolver: async () => aiConfig.effectiveConfig().embedding,
+  });
+  app.locals.retrieval = retrieval;
+  if (!runtime && service.persist) retrieval.start();
   const local = { service, learning, coach, knowledge, drafts, aiConfig };
   const run = (work, options) => runtime ? runtime.run(work, options) : Promise.resolve().then(() => {
     service.config = aiConfig.effectiveConfig(); coach.config = service.config;
@@ -142,6 +149,16 @@ export function createApp(bank, service, config, options = {}) {
   app.use('/api/matches', requireLearner);
   const runKb = (work, options = {}) => runtime ? runKnowledge(runtime, config, work, options) : run(work);
   const kbRoute = (handler, readOnly = false) => async (req, res) => res.json(await runKb(ctx => handler(req, ctx), { readOnly }));
+  app.get('/api/admin/rag/status', async (_req, res) => res.json(await retrieval.status()));
+  app.post('/api/admin/rag/reindex', async (req, res) => {
+    await limit('rag-reindex', 4, 60000);
+    res.json(await retrieval.refresh({ force: req.body?.force === true }));
+  });
+  app.get('/api/kb/search', async (req, res) => {
+    await limit(`kb-search:${req.viewer.sub}`, 30, 60000);
+    const { knowledge, aiConfig } = await runKb(ctx => ctx, { readOnly: true, retrievalOnly: true });
+    res.json(await retrieval.search(req.query.q, knowledge, { ownerId: 'primary', limit: Number(req.query.limit || 5), config: aiConfig.effectiveConfig().embedding }));
+  });
   app.get('/api/admin/status', async (_req, res) => {
     const services = {};
     try { await runtime?.health(); if (service.storage) await service.storage.health(); services.database = runtime || service.storage ? 'ready' : 'local'; services.redis = runtime ? 'ready' : 'local'; }
@@ -175,16 +192,18 @@ export function createApp(bank, service, config, options = {}) {
   app.get('/api/kb/libraries/:id/export', kbRoute((req, { knowledge }) => knowledge.exportLibrary(req.params.id, 'primary'), true));
   app.post('/api/kb/libraries/:id/documents', async (req, res) => {
     await limit(`kb:${req.viewer.sub}`, 30, 60000);
-    res.status(201).json(await runKb(({ knowledge }) => knowledge.upload({ ...req.body, libraryId: req.params.id }, 'primary')));
+    const result = await runKb(({ knowledge }) => knowledge.upload({ ...req.body, libraryId: req.params.id }, 'primary'));
+    retrieval.lastSync = 0; retrieval.tick().catch(() => {});
+    res.status(201).json(result);
   });
   app.get('/api/kb/libraries/:id/documents/:docId', kbRoute((req, { knowledge }) => knowledge.getDocument(req.params.id, req.params.docId, 'primary'), true));
   app.delete('/api/kb/libraries/:id/documents/:docId', kbRoute((req, { knowledge }) => knowledge.removeDocument(req.params.id, req.params.docId, 'primary')));
-  app.get('/api/kb/search', kbRoute((req, { knowledge }) => knowledge.searchChunks(String(req.query.q || ''), { limit: Number(req.query.limit) || 5, ownerId: 'primary' }), true));
   app.post('/api/kb/generate', requireLearner, async (req, res) => {
     await limit('kbgen:primary', 10, 60000);
-    if (!runtime) return res.json(await runKb(({ drafts, knowledge }) => drafts.generate(req.body || {}, knowledge, 'primary')));
-    const prepared = await runKb(({ drafts, knowledge }) => drafts.prepare(req.body || {}, knowledge, 'primary'), { readOnly: true });
-    const text = await completeDraft(prepared.llm, prepared.messages);
+    const snapshot = await runKb(ctx => { ctx.drafts.validateInput(req.body || {}); return ctx; }, { readOnly: true, retrievalOnly: true });
+    const retrieved = await retrieval.search(req.body.query, snapshot.knowledge, { ownerId: 'primary', config: snapshot.aiConfig.effectiveConfig().embedding });
+    const prepared = snapshot.drafts.prepare(req.body || {}, snapshot.knowledge, 'primary', retrieved);
+    const text = await snapshot.drafts.complete(prepared.llm, prepared.messages);
     res.json(await runKb(({ drafts }) => drafts.accept(prepared, text)));
   });
   app.get('/api/drafts', kbRoute((req, { drafts }) => drafts.list({ status: req.query.status || 'draft' }), true));
@@ -193,7 +212,11 @@ export function createApp(bank, service, config, options = {}) {
   app.get('/api/drafts/export', kbRoute((_req, { drafts }) => drafts.export(), true));
   app.post('/api/drafts/:id/swap', kbRoute((req, { drafts }) => drafts.markSwapped(req.params.id)));
   app.get('/api/ai/config', async (_req, res) => res.json(await runKb(({ aiConfig }) => aiConfig.masked(), { readOnly: true, configurationOnly: true })));
-  app.put('/api/ai/config', async (req, res) => res.json(await runKb(({ aiConfig }) => aiConfig.update(req.body || {}), { configurationOnly: true })));
+  app.put('/api/ai/config', async (req, res) => {
+    const result = await runKb(({ aiConfig }) => aiConfig.update(req.body || {}), { configurationOnly: true });
+    if (req.body?.provider === 'embedding') { retrieval.lastSync = 0; retrieval.tick().catch(() => {}); }
+    res.json(result);
+  });
   app.post('/api/ai/config/test', async (req, res) => {
     await limit('aitest:admin', 6, 60000);
     const aiConfig = await runKb(({ aiConfig }) => aiConfig, { readOnly: true, configurationOnly: true });

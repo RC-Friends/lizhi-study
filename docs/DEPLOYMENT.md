@@ -91,7 +91,7 @@ SeaweedFS 使用 headless Service，单容器 `weed mini` 可通过 Pod 地址�
 
 `QUESTION_RESOURCE_VERSION` 只用于初始化数据库或无数据库的本地模式。已有数据库的在线版本不会被旧环境变量覆盖。题库管理接口接受独立管理令牌或超级管理员 JWT；两者都未配置时关闭。发布还需要独立 S3 发布身份，日常读题仍使用只读身份。旧对象版本和备份应保留。迁移到这套机制时，先统一升级后端，避免旧版副本不认识数据库版本指针。
 
-模型配置也采用首次初始化机制：空数据库从 `LLM_*`、`JEV_*`、`VISION_*` 导入，后续以 PostgreSQL 中的配置为准。完成所有后端副本升级后，通过 [超级管理员面板](ADMINISTRATION.md) 修改。Kubernetes 仍从应用 Secret 注入启动口令和基础设施凭证，模型设置无需再通过修改 Secret 和重启 Pod 来更新。
+模型配置也采用首次初始化机制：空数据库从 `LLM_*`、`JEV_*`、`VISION_*`、`EMBEDDING_*` 导入，后续以 PostgreSQL 中的配置为准。Embedding 首次加入已有部署时，仅导入新提供方的 `EMBEDDING_*`，不会覆盖已有模型设置。完成所有后端副本升级后，通过 [超级管理员面板](ADMINISTRATION.md) 修改。Kubernetes 仍从应用 Secret 注入启动口令和基础设施凭证，模型设置无需再通过修改 Secret 和重启 Pod 来更新。
 
 ## 旧记录迁移
 

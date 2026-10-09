@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { HttpError } from './bank.mjs';
 import { streamCompletion } from './providers.mjs';
+import { createEmbeddings } from './embeddings.mjs';
 
 const PRESETS = {
   deepseek: { baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
@@ -15,8 +16,11 @@ export const MODEL_DEFAULTS = {
     reasoningEffort: '', thinking: '', imageMaxTokens: 32768, imageToolMaxTokens: 8192, imageTimeout: 300000, maxRetryTokens: 65536 },
   jev: { baseUrl: 'https://api.typesafe.ai/v1', apiKey: '', model: 'jev-latest', enabled: true, timeout: 45000 },
   vision: { baseUrl: '', apiKey: '', model: '', enabled: false, timeout: 180000, maxTokens: 8192, reasoningEffort: '', thinking: '' },
+  embedding: { baseUrl: '', apiKey: '', model: '', enabled: false, timeout: 30000, batchSize: 16, dimensions: 0, minSimilarity: 0.3 },
 };
 const own = (object, key) => Object.hasOwn(object, key);
+const providerDefaults = (name, source = {}) => Object.fromEntries(Object.entries(MODEL_DEFAULTS[name])
+  .map(([key, fallback]) => [key, key === 'apiKey' ? source.key || '' : source[key] ?? fallback]));
 function validUrl(value) {
   if (!value) return true;
   try { const parsed = new URL(value); return ['http:', 'https:'].includes(parsed.protocol) && !parsed.username && !parsed.password && !parsed.search && !parsed.hash; } catch { return false; }
@@ -25,7 +29,11 @@ function validateProvider(provider, value) {
   if (!value || typeof value !== 'object') throw new HttpError(400, '模型配置结构无效。');
   for (const [key, fallback] of Object.entries(MODEL_DEFAULTS[provider])) {
     if (typeof value[key] !== typeof fallback) throw new HttpError(400, `模型参数 ${key} 的类型无效。`);
-    if (typeof fallback === 'number' && (!Number.isSafeInteger(value[key]) || value[key] < (key.toLowerCase().includes('timeout') ? 1000 : 64) || value[key] > (key.toLowerCase().includes('timeout') ? 600000 : 131072))) throw new HttpError(400, `模型参数 ${key} 超出允许范围。`);
+    if (typeof fallback === 'number') {
+      const bounds = { batchSize: [1, 64], dimensions: [0, 8192], minSimilarity: [-1, 1] }[key]
+        || (key.toLowerCase().includes('timeout') ? [1000, 600000] : [64, 131072]);
+      if (!(key === 'minSimilarity' ? Number.isFinite(value[key]) : Number.isSafeInteger(value[key])) || value[key] < bounds[0] || value[key] > bounds[1]) throw new HttpError(400, `模型参数 ${key} 超出允许范围。`);
+    }
   }
   if (!validUrl(value.baseUrl) || value.baseUrl.length > 2048) throw new HttpError(400, '服务地址须为不含账号、查询参数或片段的 http(s) 地址。');
   if (value.apiKey.length > 4096 || value.model.length > 100) throw new HttpError(400, '密钥或模型名称过长。');
@@ -43,20 +51,23 @@ export function validateAiConfig(value) {
 // the PR's old flat record). Runtime reads never merge environment defaults.
 export function initialModelSettings(config, legacy = null) {
   const providers = {};
-  for (const [name, defaults] of Object.entries(MODEL_DEFAULTS)) {
-    const source = config[name] || {};
-    providers[name] = Object.fromEntries(Object.entries(defaults).map(([key, fallback]) => [key, key === 'apiKey' ? source.key || '' : source[key] ?? fallback]));
-  }
+  for (const name of Object.keys(MODEL_DEFAULTS)) providers[name] = providerDefaults(name, config[name]);
   if (legacy) {
     for (const key of ['baseUrl', 'apiKey', 'model']) if (legacy[key]) providers.llm[key] = legacy[key];
     if (legacy.baseUrl && legacy.baseUrl !== config.llm?.baseUrl && !legacy.apiKey) providers.llm.apiKey = '';
   }
   return validateAiConfig({ version: 2, revision: crypto.randomUUID(), updatedAt: new Date().toISOString(), providers });
 }
+function upgradeModelSettings(value, config) {
+  if (value?.providers?.embedding) return validateAiConfig(value);
+  // A newly introduced provider bootstraps once. Existing LLM/JEV/vision
+  // settings stay database-owned and are never merged with environment values.
+  return validateAiConfig({ ...value, revision: crypto.randomUUID(), providers: { ...value.providers, embedding: providerDefaults('embedding', config.embedding) } });
+}
 export async function bootstrapModelSettings(client, config) {
   const row = (await client.query("SELECT payload FROM study_ai_config WHERE id='platform'")).rows[0];
-  if (row?.payload?.version === 2) { validateAiConfig(row.payload); return; }
-  const value = initialModelSettings(config, row?.payload);
+  if (row?.payload?.version === 2 && row.payload.providers?.embedding) { validateAiConfig(row.payload); return; }
+  const value = row?.payload?.version === 2 ? upgradeModelSettings(row.payload, config) : initialModelSettings(config, row?.payload);
   await client.query("INSERT INTO study_ai_config(id,payload) VALUES('platform',$1::jsonb) ON CONFLICT(id) DO UPDATE SET payload=EXCLUDED.payload", [JSON.stringify(value)]);
 }
 export function applyModelSettings(config, value) {
@@ -86,8 +97,8 @@ export class AiConfigService {
       try { const file = JSON.parse(fs.readFileSync(this.filename, 'utf8')); if (file.version !== 1 || !file.value) throw new Error(); saved = file.value; }
       catch { throw new Error('AI 配置文件无法读取；为避免覆盖原配置，请先检查 ai-config.json。'); }
     }
-    this.stored = saved?.version === 2 ? validateAiConfig(saved) : initialModelSettings(config, saved);
-    if (persist && !storage && saved?.version !== 2) this.save();
+    this.stored = saved?.version === 2 ? upgradeModelSettings(saved, config) : initialModelSettings(config, saved);
+    if (persist && !storage && !saved?.providers?.embedding) this.save();
   }
   effectiveConfig() { return applyModelSettings(this.config, this.stored); }
   effectiveLlm() { return this.effectiveConfig().llm; }
@@ -133,6 +144,10 @@ export class AiConfigService {
     if (!next.baseUrl || !next.apiKey || !next.model) throw new HttpError(400, '请先填写服务地址、API Key 与模型名称。');
     const started = Date.now();
     try {
+      if (provider === 'embedding') {
+        const [vector] = await createEmbeddings({ ...next, key: next.apiKey, timeout: 20000 }, ['相向而行时，相遇时间等于距离除以速度和。']);
+        return { ok: true, latencyMs: Date.now() - started, reply: `向量接口已响应 · ${vector.length} 维` };
+      }
       if (provider === 'jev') {
         const response = await fetch(`${next.baseUrl}/systemone`, { method: 'POST', headers: { Authorization: `Bearer ${next.apiKey}`, 'Content-Type': 'application/json' },
           signal: AbortSignal.timeout(20000), body: JSON.stringify({ model: next.model, state: { prompt: '选择 A 以确认连接。' }, questions: { answer: { type: 'choice', instructions: '选择 A。', criteria: { A: '连接成功', B: '其他' } } } }) });

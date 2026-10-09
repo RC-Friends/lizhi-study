@@ -35,6 +35,16 @@ export function chunkDocument(format, content) {
     const sentences = block.text.match(/[^。！？；\n]+[。！？；]?/g) || [block.text];
     let piece = '';
     for (const sentence of sentences) {
+      // A PDF line or a formula may have no sentence punctuation at all.
+      // Hard-split these spans as well, keeping embedding inputs bounded.
+      if (sentence.length > KB_LIMITS.chunkChars) {
+        if (piece) { chunks.push({ anchor: block.anchor, text: piece }); piece = ''; }
+        for (let start = 0; start < sentence.length; start += KB_LIMITS.chunkChars) {
+          const text = sentence.slice(start, start + KB_LIMITS.chunkChars);
+          if (text.length === KB_LIMITS.chunkChars) chunks.push({ anchor: block.anchor, text }); else piece = text;
+        }
+        continue;
+      }
       if (piece && piece.length + sentence.length > KB_LIMITS.chunkChars) { chunks.push({ anchor: block.anchor, text: piece }); piece = ''; }
       piece += sentence;
       if (piece.length >= KB_LIMITS.chunkChars) { chunks.push({ anchor: block.anchor, text: piece }); piece = ''; }

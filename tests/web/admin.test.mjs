@@ -43,7 +43,7 @@ test('administrator gates protect model configuration and imports without creati
   };
   const admin = (await request('/api/login', null, { password: settings.adminPassword, role: 'admin' })).body;
   const learner = (await request('/api/login', null, { password: settings.sitePassword })).body;
-  for (const url of ['/api/admin/status', '/api/ai/config']) {
+  for (const url of ['/api/admin/status', '/api/ai/config', '/api/admin/rag/status']) {
     assert.equal((await request(url)).status, 401); assert.equal((await request(url, learner.token)).status, 403); assert.equal((await request(url, admin.token)).status, 200);
   }
   assert.equal((await request('/api/admin/question-bank/schema', learner.token)).status, 401);

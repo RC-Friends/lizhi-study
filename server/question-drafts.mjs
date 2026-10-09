@@ -91,7 +91,7 @@ export class DraftService {
     const prepared = this.prepare(input, knowledge, ownerId);
     return this.accept(prepared, await this.complete(prepared.llm, prepared.messages));
   }
-  prepare(input = {}, knowledge = null, ownerId = null) {
+  validateInput(input = {}) {
     const query = typeof input.query === 'string' ? input.query.trim() : '';
     if (!query || query.length > 100) throw new HttpError(400, '请输入 1—100 字的出题主题或知识点。');
     const module = input.module || null;
@@ -99,15 +99,19 @@ export class DraftService {
     const count = input.count ?? 3;
     if (!Number.isInteger(count) || count < 1 || count > DRAFT_LIMITS.count) throw new HttpError(400, `一次生成 1—${DRAFT_LIMITS.count} 道。`);
     if (!this.ready()) throw new HttpError(409, '尚未配置模型服务，请联系管理员在管理面板中配置出题模型。', 'llm_not_configured');
+    return { query, module, count };
+  }
+  prepare(input = {}, knowledge = null, ownerId = null, retrieved = null) {
+    const { query, module, count } = this.validateInput(input);
     if (!knowledge) throw new HttpError(400, '知识库服务不可用。');
-    const sources = knowledge.searchChunks(query, { limit: 5, ownerId });
+    const sources = retrieved?.items || knowledge.searchChunks(query, { limit: 5, ownerId });
     if (!sources.length) throw new HttpError(400, '知识库里没有找到与该主题相关的片段，请先上传相关资料或换个关键词。');
     const keys = sources.map((_, index) => `K${index + 1}`);
     const materials = sources.map((chunk, index) => `[K${index + 1}] 《${chunk.document.title}》· ${chunk.anchor}\n${chunk.text}`).join('\n\n');
     const llm = { ...this.llmResolver(), maxTokens: Math.max(this.llmResolver()?.maxTokens || 0, 4096) };
-    return { llm, messages: buildPrompt(query, module, count, materials), count, module, sources, keys };
+    return { llm, messages: buildPrompt(query, module, count, materials), count, module, sources, keys, retrieval: retrieved ? { mode: retrieved.mode, fallback: retrieved.fallback } : { mode: 'keyword', fallback: 'disabled' } };
   }
-  accept({ count, module, sources, keys }, text) {
+  accept({ count, module, sources, keys, retrieval }, text) {
     const parsed = parseQuestions(text);
     const createdAt = new Date(this.clock()).toISOString();
     const created = [];
@@ -129,7 +133,7 @@ export class DraftService {
     }
     if (this.storage) for (const record of created) this.storage.saveKbDraft(record);
     else this.save();
-    return { drafts: created, sources: sources.map(({ document, anchor, score }) => ({ title: document.title, anchor, score })) };
+    return { drafts: created, retrieval, sources: sources.map(({ document, anchor, score, similarity }) => ({ title: document.title, anchor, score, ...(similarity !== undefined ? { similarity } : {}) })) };
   }
   markSwapped(id) {
     const draft = this.drafts.get(id);

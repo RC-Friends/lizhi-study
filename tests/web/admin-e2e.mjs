@@ -47,6 +47,20 @@ export async function checkAdministration({ browser, base, adminPassword, learne
     await page.getByRole('button', { name: '查看内容', exact: true }).click(); await page.locator('.kh-document-content').waitFor(); await screenshot(page, 'knowledge-document');
     await page.getByRole('button', { name: '关闭', exact: true }).click();
     await page.getByRole('button', { name: '删除资料 行程讲义', exact: true }).click(); await page.getByRole('button', { name: '保留', exact: true }).click(); assert.equal(await page.locator('.kh-document').count(), 1);
+    await adminNav('模型配置').click(); await page.getByRole('button', { name: 'Embedding 检索', exact: true }).click();
+    await page.getByRole('heading', { name: 'Embedding 检索', exact: true }).waitFor(); await page.getByLabel('向量索引进度', { exact: true }).waitFor();
+    if (modelEndpoint) {
+      await page.locator('#ai-baseurl').fill(modelEndpoint); await page.locator('#ai-key').fill('browser-test-embedding-key'); await page.locator('#ai-model').fill('browser-vector-model');
+      await page.getByLabel('启用此模型', { exact: true }).check();
+      await page.getByRole('button', { name: '测试连接', exact: true }).click(); await page.getByRole('status').filter({ hasText: '向量接口已响应' }).waitFor();
+      await page.getByRole('button', { name: '保存模型配置', exact: true }).click(); await page.getByRole('status').filter({ hasText: '已保存' }).waitFor();
+      await page.getByText('索引已就绪', { exact: true }).waitFor();
+      await page.getByLabel('试着问一句', { exact: true }).fill('迎面走多久碰头');
+    } else await page.getByLabel('试着问一句', { exact: true }).fill('相遇问题');
+    await page.getByRole('button', { name: '检索资料', exact: true }).click();
+    await page.getByRole('status').filter({ hasText: modelEndpoint ? '已结合语义与关键词检索' : '已使用关键词检索' }).waitFor();
+    assert.ok(await page.locator('.ad-rag-results article').count() > 0); await screenshot(page, 'admin-embedding');
+    await page.setViewportSize({ width: 390, height: 844 }); await screenshot(page, 'admin-mobile-embedding'); await page.setViewportSize({ width: 1440, height: 1050 });
     await adminNav('题库导入').click(); await page.getByLabel('选择标准题库 JSON', { exact: true }).setInputFiles(new URL('../../examples/question-bank/questions.json', import.meta.url).pathname);
     await page.getByRole('status').filter({ hasText: '格式校验通过' }).waitFor(); await screenshot(page, 'admin-import');
     await page.setViewportSize({ width: 390, height: 844 });

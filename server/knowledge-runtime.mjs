@@ -5,7 +5,7 @@ import { PostgresStore } from './storage.mjs';
 
 // Knowledge/configuration writes use their own short transaction and never
 // acquire the learner's match lock. Inference runs outside this transaction.
-export async function runKnowledge(runtime, config, work, { readOnly = false, configurationOnly = false } = {}) {
+export async function runKnowledge(runtime, config, work, { readOnly = false, configurationOnly = false, retrievalOnly = false } = {}) {
   const client = await runtime.pool.connect(), writes = [];
   try {
     await client.query(readOnly ? 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY' : 'BEGIN');
@@ -17,8 +17,9 @@ export async function runKnowledge(runtime, config, work, { readOnly = false, co
     storage.aiConfig = (await client.query("SELECT id,payload FROM study_ai_config WHERE id='platform'")).rows.map(row => ({ id: row.id, value: row.payload }));
     if (!configurationOnly) {
       storage.kbLibraries = (await client.query('SELECT payload FROM study_kb_libraries')).rows.map(row => row.payload);
-      storage.kb = (await client.query('SELECT payload FROM study_kb_documents')).rows.map(row => row.payload);
-      storage.kbDrafts = (await client.query('SELECT payload FROM study_kb_drafts ORDER BY created_at,id')).rows.map(row => row.payload);
+      // Retrieval does not need image base64 payloads or the draft inbox.
+      storage.kb = (await client.query(`SELECT payload FROM study_kb_documents${retrievalOnly ? " WHERE payload->>'format'<>'image'" : ''}`)).rows.map(row => row.payload);
+      if (!retrievalOnly) storage.kbDrafts = (await client.query('SELECT payload FROM study_kb_drafts ORDER BY created_at,id')).rows.map(row => row.payload);
     }
     const aiConfig = new AiConfigService(config, { storage });
     const knowledge = new KnowledgeService(config, { storage });
