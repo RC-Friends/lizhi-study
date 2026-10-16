@@ -7,8 +7,8 @@ import { MatchService } from '../../server/matches.mjs';
 import { QuestionBank } from '../../server/bank.mjs';
 import { question, config, settings, result } from './fixtures.mjs';
 
-async function setup(t, { providers = {}, coachProvider, configuration = config } = {}) {
-  const bank = new QuestionBank('', [question]);
+async function setup(t, { providers = {}, coachProvider, configuration = config, rows = [question] } = {}) {
+  const bank = new QuestionBank('', rows);
   const service = new MatchService(bank, configuration, { persist: false, providers });
   const coach = new CoachService(bank, service, configuration, { provider: coachProvider });
   const app = createApp(bank, service, configuration, { coach });
@@ -165,4 +165,29 @@ test('smart scope plans a deterministic weak-first paper through the API', async
   assert.equal(created.match.settings.scope, 'smart');
   assert.deepEqual(created.match.settings.composition, { review: 1, weak: 0, extend: 0 });
   assert.equal(created.match.current.question.id, question.id);
+});
+
+test('material assembly reports actual counts and scoped companions through the API', async t => {
+  const rows = ['a', 'b', 'c'].map(id => ({ ...question, id, material_id: 'shared',
+    material: '材料内容', material_html: '<p>材料内容</p>' }));
+  const { request, login } = await setup(t, { rows });
+  const token = await login();
+  for (const scope of ['all', 'smart']) {
+    const response = await request('/api/matches', { token, body: { ...settings, mode: 'practice', scope } });
+    assert.equal(response.status, 201);
+    const { match } = await response.json();
+    assert.equal(match.count, 3); assert.equal(match.settings.count, 3); assert.equal(match.settings.requestedCount, 1);
+    if (scope === 'smart') assert.deepEqual(match.settings.composition, { review: 1, weak: 2, extend: 0 });
+    assert.deepEqual(match.current.materialGroup, { index: 0, count: 3 });
+    assert.ok(!JSON.stringify(match).includes('GOLD_SECRET'));
+    await request(`/api/matches/${match.id}/answer`, { token, body: { choice: 'A', index: 0 } });
+    const next = await (await request(`/api/matches/${match.id}/next`, { token, body: { index: 0 } })).json();
+    assert.equal(next.current.question.materialHtml, match.current.question.materialHtml);
+    assert.deepEqual(next.current.materialGroup, { index: 1, count: 3 });
+    await request(`/api/matches/${match.id}/finish`, { token, body: {} });
+  }
+  const availability = await (await request('/api/learning/availability', { token, body: { ...settings, scope: 'wrong' } })).json();
+  assert.equal(availability.count, 3);
+  const redo = await (await request('/api/matches', { token, body: { ...settings, mode: 'practice', scope: 'wrong' } })).json();
+  assert.equal(redo.match.count, 3);
 });

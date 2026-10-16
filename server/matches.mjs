@@ -118,6 +118,8 @@ export class MatchService {
   }
   snapshot(match) {
     const round = this.current(match);
+    const materialKey = this.bank.materialKeys.get(match.questionIds[match.index]);
+    const materialIds = match.questionIds.filter(id => this.bank.materialKeys.get(id) === materialKey);
     const scores = scoreRounds(match.rounds, match.settings), visible = Boolean(round.humanChoice);
     const history = match.rounds.flatMap((item, index) => item.phase === 'revealed' ? [{
       index, question: this.bank.publicQuestion(match.questionIds[index]), humanChoice: item.humanChoice,
@@ -134,6 +136,7 @@ export class MatchService {
       endReason: match.endReason || null, index: match.index, count: match.questionIds.length,
       scores, history, model: match.model,
       current: match.status === 'active' ? { index: match.index, question: this.bank.publicQuestion(match.questionIds[match.index]),
+        materialGroup: { index: materialIds.indexOf(match.questionIds[match.index]), count: materialIds.length },
         phase: round.phase, parallel: Boolean(round.parallel), aiStatus: round.aiStatus || (round.phase === 'human' ? 'idle' : round.phase === 'revealed' ? 'ready' : round.phase === 'error' ? 'error' : 'running'),
         stage: visible ? round.stage || '' : '', stageLabel: visible ? round.stageLabel || '' : '',
         startedAt: round.startedAt, submittedAt: round.submittedAt || null, humanChoice: round.humanChoice || null,
@@ -188,6 +191,8 @@ export class MatchService {
       maxRetryTokens: this.config.llm.maxRetryTokens || 65536 };
     if (mode !== 'practice' && !demo && settings.images !== 'text' && !catalog[mode].vision) throw new HttpError(400, '当前选手尚不能处理图片，请选择纯文字题。', 'vision_unavailable');
     const questionIds = this.bank.draw(settings, { allowedQuestionIds, requestedQuestionIds: input.questionIds });
+    settings.requestedCount = settings.count;
+    settings.count = questionIds.length;
     if (mode === 'llm') this.requireCapacity();
     const token = crypto.randomBytes(32).toString('base64url');
     const match = { id: crypto.randomUUID(), tokenHash: hash(token), revision: 1, status: 'active', index: 0,

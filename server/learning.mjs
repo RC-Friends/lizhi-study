@@ -124,30 +124,34 @@ export class LearningService {
     const count = input.count;
     if (!Number.isInteger(count) || count < 1 || count > 100) throw new HttpError(400, '题量须为 1—100 道整数。');
     const settings = { modules: input.modules || MODULES, source: input.source || 'all', images: input.images || 'mixed' };
-    const pool = this.bank.eligible(settings);
+    const groups = this.bank.eligibleGroups(settings);
+    const pool = groups.flatMap(ids => ids.map(id => this.bank.byId.get(id)));
     if (pool.length < count) throw new HttpError(400, `当前条件只有 ${pool.length} 道题，请减少题量或放宽筛选。`);
     const stats = this.questionStats(ownerId), annotations = this.annotations(ownerId), moduleScores = this.moduleAccuracy(ownerId);
     const mastered = this.isMastered.bind(this);
     const ordered = pool.map(row => ({ row, key: smartKey(row, stats, annotations, mastered, moduleScores) }))
       .sort((a, b) => compareSmart(a.key, b.key));
-    // Greedy pass skips questions whose knowledge points are already covered;
-    // a second pass backfills if the pool runs short, so count is always met.
-    const usedPoints = new Set(), picked = [], deferred = [];
+    const rank = new Map(ordered.map((entry, index) => [entry.row.id, index]));
+    const rankedGroups = groups.sort((a, b) => Math.min(...a.map(id => rank.get(id))) - Math.min(...b.map(id => rank.get(id))));
+    // Knowledge-point variety is considered between materials. A repeated
+    // point inside one material must never cause its questions to be split.
+    const usedPoints = new Set(), preferred = [], deferred = [];
     const pointsOf = row => Array.isArray(row.knowledge_points) ? row.knowledge_points.filter(point => typeof point === 'string' && point) : [];
-    for (const entry of ordered) {
-      if (picked.length >= count) break;
-      const points = pointsOf(entry.row);
-      if (points.some(point => usedPoints.has(point))) { deferred.push(entry); continue; }
-      picked.push(entry); for (const point of points) usedPoints.add(point);
+    for (const ids of rankedGroups) {
+      const points = ids.flatMap(id => pointsOf(this.bank.byId.get(id)));
+      if (points.some(point => usedPoints.has(point))) { deferred.push(ids); continue; }
+      preferred.push(ids); for (const point of points) usedPoints.add(point);
     }
-    for (const entry of deferred) { if (picked.length >= count) break; picked.push(entry); }
+    const ids = this.bank.selectGroups([...preferred, ...deferred], count);
+    const keys = new Map(ordered.map(entry => [entry.row.id, entry.key]));
     const composition = { review: 0, weak: 0, extend: 0 };
-    for (const entry of picked) composition[SMART_TIERS[entry.key.tier]]++;
-    return { ids: picked.map(entry => entry.row.id), composition };
+    for (const id of ids) composition[SMART_TIERS[keys.get(id).tier]]++;
+    return { ids, composition };
   }
   availability(input, ownerId = PRIMARY) {
     const settings = { modules: input.modules || MODULES, source: input.source || 'all', images: input.images || 'mixed' };
-    const rows = this.bank.eligible(settings, { allowedQuestionIds: this.eligibleIds(input.scope || 'all', ownerId) });
+    const rows = this.bank.eligibleGroups(settings, { allowedQuestionIds: this.eligibleIds(input.scope || 'all', ownerId) })
+      .flatMap(ids => ids.map(id => this.bank.byId.get(id)));
     return { count: rows.length, modules: MODULES.map(name => ({ name, count: rows.filter(q => q.module === name).length })) };
   }
   summary(match) {

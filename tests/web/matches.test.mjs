@@ -5,13 +5,45 @@ import os from 'node:os';
 import path from 'node:path';
 import { QuestionBank } from '../../server/bank.mjs';
 import { MatchService, scoreRounds } from '../../server/matches.mjs';
-import { question, config, settings, result } from './fixtures.mjs';
-import { ProviderError } from '../../server/providers.mjs';
+import { question, config, settings, result, streamingResponse } from './fixtures.mjs';
+import { ProviderError, runLlm } from '../../server/providers.mjs';
 
 const make = (provider, rows = [question], extra = {}) => {
   const bank = new QuestionBank('', rows);
   return new MatchService(bank, { ...config, ...extra }, { persist: false, providers: { llm: provider } });
 };
+test('all three material questions reach the LLM with complete material while answers stay sealed', async () => {
+  const material = '共有 200 人，纸质阅读 120 人，电子阅读 50 人，有声阅读 30 人。';
+  const materialHtml = '<p>共有 200 人。</p><table><tr><td>纸质阅读</td><td>120</td></tr><tr><td>电子阅读</td><td>50</td></tr><tr><td>有声阅读</td><td>30</td></tr></table>';
+  const rows = Array.from({ length: 3 }, (_, i) => ({ ...question, id: `material_${i}`,
+    material_id: 'reading', material, material_html: materialHtml, stem: `第 ${i + 1} 小题` }));
+  const sent = [];
+  const fetcher = async (_url, request) => {
+    const body = JSON.parse(request.body), input = JSON.parse(body.messages[1].content[0].text);
+    assert.equal(input.material, material);
+    assert.ok(!request.body.includes('GOLD_SECRET'));
+    sent.push(input.question);
+    return streamingResponse([{ choices: [{ delta: body.tools
+      ? { tool_calls: [{ index: 0, id: 'call', function: { name: 'submit_answer', arguments: '{"choice":"D"}' } }] }
+      : { content: '依据同一份材料中的调查人数，对应当前小题进行计算。' },
+      finish_reason: body.tools ? 'tool_calls' : 'stop' }] }, '[DONE]']);
+  };
+  const service = make((q, llm, context) => runLlm(q, llm, { ...context, fetcher }), rows);
+  const created = service.create(settings), match = service.authenticate(created.match.id, created.token);
+  assert.equal(created.match.count, 3);
+  for (let index = 0; index < 3; index++) {
+    await service.jobs.get(match.id).task;
+    const sealed = service.snapshot(match);
+    assert.equal(sealed.current.question.materialHtml, materialHtml);
+    assert.deepEqual(sealed.current.materialGroup, { index, count: 3 });
+    assert.equal(sealed.current.aiStatus, 'ready');
+    assert.equal(sealed.current.explanation, ''); assert.equal(sealed.current.result, null);
+    assert.equal(service.submit(match, { choice: 'D', index }).current.phase, 'revealed');
+    service.next(match, { index });
+  }
+  assert.deepEqual(sent, ['第 1 小题', '第 1 小题', '第 2 小题', '第 2 小题', '第 3 小题', '第 3 小题']);
+  assert.equal(match.status, 'finished');
+});
 test('no gold answers are exposed before BOTH submissions; duplicate submit is idempotent', async () => {
   let resolve, invoked = 0;
   const service = make(async () => { invoked++; return new Promise(r => { resolve = r; }); });

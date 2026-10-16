@@ -161,3 +161,55 @@ test('smart plan avoids repeating a knowledge point while the pool allows, then 
   const full = learning.smartPlan({ count: 3, modules: ['数量关系'] });
   assert.deepEqual(full.ids, ['q3', question.id, 'q4']);
 });
+
+test('smart papers keep shared materials together through match creation and respect filters', () => {
+  const bank = new QuestionBank(null, [
+    { ...question, id: 'a', material_id: 'shared' },
+    { ...question, id: 'b', material_id: 'other' },
+    { ...question, id: 'c', material_id: 'shared' },
+    { ...question, id: 'filtered', material_id: 'excluded', source_type: '真题' },
+  ]);
+  const matches = new MatchService(bank, config, { persist: false });
+  const learning = new LearningService(bank, matches, config, { persist: false });
+  const input = { ...settings, mode: 'practice', scope: 'smart', count: 3, source: 'mock' };
+  const plan = learning.smartPlan(input);
+  assert.deepEqual(plan, { ids: ['a', 'c', 'b'], composition: { review: 0, weak: 0, extend: 3 } });
+  const created = matches.create({ ...input, questionIds: plan.ids }, { ownerId: 'primary', allowedQuestionIds: learning.eligibleIds('smart'), composition: plan.composition });
+  const match = matches.authenticate(created.match.id, created.token);
+  assert.deepEqual(match.questionIds, ['a', 'c', 'b']);
+  matches.submit(match, { choice: 'D', index: 0 });
+  assert.equal(matches.next(match, { index: 0 }).current.question.id, 'c');
+});
+
+test('smart assembly prioritizes a whole wrong material over target size and repeated knowledge points', () => {
+  const bank = new QuestionBank(null, [
+    ...['a', 'b', 'c'].map(id => ({ ...question, id, material_id: 'shared',
+      material: '共享材料', material_html: '<p>共享材料</p>', knowledge_points: ['方程'] })),
+    { ...question, id: 'new', material_id: null },
+  ]);
+  const matches = new MatchService(bank, config, { persist: false });
+  const learning = new LearningService(bank, matches, config, { persist: false });
+  const created = matches.create({ ...settings, mode: 'practice', questionIds: ['b'] }, { ownerId: 'primary' });
+  const match = matches.authenticate(created.match.id, created.token);
+  assert.equal(created.match.count, 3); assert.equal(created.match.settings.count, 3);
+  assert.equal(created.match.settings.requestedCount, 1);
+  assert.deepEqual(created.match.current.materialGroup, { index: 0, count: 3 });
+  matches.submit(match, { choice: 'A', index: 0 }); matches.finish(match);
+  const plan = learning.smartPlan({ ...settings, count: 1 });
+  assert.deepEqual(plan, { ids: ['a', 'b', 'c'], composition: { review: 1, weak: 2, extend: 0 } });
+  assert.deepEqual(learning.eligibleIds('wrong'), ['a']);
+  assert.equal(learning.availability({ ...settings, scope: 'wrong' }).count, 3);
+  assert.equal(learning.availability({ ...settings, scope: 'unseen' }).count, 4);
+  learning.updateQuestion('b', { bookmarked: true });
+  assert.equal(learning.availability({ ...settings, scope: 'bookmarked' }).count, 3);
+  const redo = matches.create({ ...settings, mode: 'practice', scope: 'wrong' }, {
+    ownerId: 'primary', allowedQuestionIds: learning.eligibleIds('wrong'),
+  });
+  const redone = matches.authenticate(redo.match.id, redo.token);
+  assert.deepEqual(redone.questionIds, ['a', 'b', 'c']);
+  matches.submit(redone, { choice: 'D', index: 0 });
+  const next = matches.next(redone, { index: 0 });
+  assert.equal(next.current.question.materialHtml, redo.match.current.question.materialHtml);
+  assert.equal(next.current.question.materialId, redo.match.current.question.materialId);
+  assert.deepEqual(next.current.materialGroup, { index: 1, count: 3 });
+});

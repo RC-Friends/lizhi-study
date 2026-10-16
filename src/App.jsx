@@ -160,6 +160,10 @@ function AiPanel({ match, onRetry, busy }) {
   </aside>;
 }
 
+function MaterialPanel({ question, group, onImage }) {
+  return <details className="material-panel" open><summary><FileText size={16} /><span>阅读材料{group?.count > 1 && ` · 第 ${group.index + 1} / ${group.count} 小题`}</span><ChevronDown size={16} /></summary><Rich html={question.materialHtml} onImage={onImage} /></details>;
+}
+
 function Arena({ match, onAction, busy, error, onImage, connection, onChanged }) {
   const [selected, setSelected] = useState(null);
   const round = match.current, question = round.question, result = round.result, practice = match.settings.mode === 'practice';
@@ -182,7 +186,7 @@ function Arena({ match, onAction, busy, error, onImage, connection, onChanged })
     <Scoreboard match={match} /><RoundProgress match={match} />
     <div className="duel-grid"><section className="question-card"><div className="question-meta"><div><span className="module-badge">{question.module}</span><span className="question-type">单项选择</span>{question.hasImages && <span className="image-badge"><ImageIcon size={13} />含图</span>}</div><span className="source-caption">{question.year} · {question.province} · {question.sourceType}</span></div>
         <div className="human-timer"><span><Clock3 size={15} />你的用时 <time>{seconds(humanElapsed)}</time></span><small>{round.paused ? '已暂停 · 计时停止' : round.phase !== 'human' ? '已交卷 · 计时停止' : round.parallel ? '与 AI 同时开始 · 独立作答' : '独立作答中'}</small></div>
-        {question.materialHtml && <details className="material-panel" open><summary><FileText size={16} /><span>阅读材料</span><ChevronDown size={16} /></summary><Rich html={question.materialHtml} onImage={onImage} /></details>}
+        {question.materialHtml && <MaterialPanel key={question.materialId || question.materialHtml} question={question} group={round.materialGroup} onImage={onImage} />}
         <Rich html={question.stemHtml} className="question-stem" onImage={onImage} />
         {question.hasImages && <div className="image-hint"><ScanEye size={13} />{imageOptions ? '点选项选答案 · 点放大按钮查看题图' : '点击题干或材料中的图片可放大查看'}</div>}
         <div className={`answer-options ${imageOptions ? 'image-options' : ''}`} role="group" aria-label="选择你的答案">{question.options.map(option => {

@@ -15,7 +15,7 @@ export function makeFixture(root) {
   const questions = MODULES.flatMap((module, m) => Array.from({ length: 12 }, (_, i) => ({
     id: `test-${m}-${i}`,
     module, stem: `合成验收题 ${m + 1}-${i + 1}：两本练习册共多少钱？`,
-    material: '每本练习册 12 元。', options: { A: '12 元', B: '18 元', C: '20 元', D: '24 元' }, answer: 'D',
+    material: `合成验收题 ${m + 1}-${i + 1} 的材料：每本练习册 12 元。`, options: { A: '12 元', B: '18 元', C: '20 元', D: '24 元' }, answer: 'D',
     images: i % 2 === 0 ? [{ path: relative, role: 'stem' }] : [], analysis: '12 × 2 = 24 元。',
   })));
   const rows = compileImport({ schemaVersion: '1.0', bankId: 'ci-fixture', questions }, new Map([[relative, { path: relative, width: 1, height: 1 }]]));
