@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "1.0",
+  "bankId": "community-reading-demo",
+  "materials": [
+    {
+      "id": "reading-survey",
+      "text": "某社区对居民首选阅读方式进行调查，共收回 200 份有效问卷，每人只选一种。首选纸质阅读 120 人、电子阅读 50 人、有声阅读 30 人。电子阅读不含有声阅读，各类别人数互不重复。"
+    }
+  ],
+  "questions": [
+    {
+      "id": "reading-share",
+      "module": "资料分析",
+      "materialId": "reading-survey",
+      "materialOrder": 1,
+      "stem": "首选纸质阅读的人数占有效样本的比重为多少？",
+      "options": {"A": "40%", "B": "50%", "C": "60%", "D": "75%"},
+      "answer": "C",
+      "analysis": "120 ÷ 200 = 60%。"
+    },
+    {
+      "id": "reading-total",
+      "module": "资料分析",
+      "materialId": "reading-survey",
+      "materialOrder": 2,
+      "stem": "首选电子阅读或有声阅读的共有多少人？",
+      "options": {"A": "50", "B": "80", "C": "120", "D": "150"},
+      "answer": "B",
+      "analysis": "50 + 30 = 80 人。"
+    },
+    {
+      "id": "reading-ratio",
+      "module": "资料分析",
+      "materialId": "reading-survey",
+      "materialOrder": 3,
+      "stem": "首选纸质阅读的人数是首选电子阅读人数的多少倍？",
+      "options": {"A": "1.2", "B": "1.5", "C": "2", "D": "2.4"},
+      "answer": "D",
+      "analysis": "120 ÷ 50 = 2.4 倍。"
+    }
+  ]
+}

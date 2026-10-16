@@ -8,19 +8,40 @@
   "properties": {
     "schemaVersion": {"const": "1.0"},
     "bankId": {"type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$"},
+    "materials": {"type": "array", "maxItems": 20000, "items": {"$ref": "#/$defs/material"}},
     "questions": {"type": "array", "minItems": 1, "maxItems": 20000, "items": {"$ref": "#/$defs/question"}}
   },
   "$defs": {
     "text": {"type": "string", "maxLength": 100000},
+    "material": {
+      "type": "object", "additionalProperties": false, "required": ["id"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$"},
+        "text": {"$ref": "#/$defs/text"},
+        "images": {
+          "type": "array", "maxItems": 64,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["path"],
+            "properties": {
+              "path": {"type": "string", "minLength": 1, "maxLength": 300},
+              "kind": {"enum": ["image", "formula"]}
+            }
+          }
+        }
+      }
+    },
     "question": {
       "type": "object", "additionalProperties": false,
       "required": ["id", "module", "stem", "options", "answer", "analysis"],
+      "dependentRequired": {"materialId": ["materialOrder"], "materialOrder": ["materialId"]},
       "properties": {
         "id": {"type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$"},
         "module": {"enum": ["政治理论", "常识判断", "言语理解", "数量关系", "判断推理", "资料分析"]},
         "submodule": {"type": "string", "maxLength": 100},
         "stem": {"type": "string", "minLength": 1, "maxLength": 100000},
         "material": {"$ref": "#/$defs/text"},
+        "materialId": {"type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$"},
+        "materialOrder": {"type": "integer", "minimum": 1, "maximum": 100},
         "options": {
           "type": "object", "minProperties": 2, "maxProperties": 6, "additionalProperties": false,
           "patternProperties": {"^[A-F]$": {"$ref": "#/$defs/text"}}

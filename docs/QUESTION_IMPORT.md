@@ -40,7 +40,10 @@
 | `module` | 是 | 政治理论、常识判断、言语理解、数量关系、判断推理、资料分析之一 |
 | `submodule` | 否 | 例如“数学运算”“图形推理” |
 | `stem` | 是 | 题干，非空纯文本 |
-| `material` | 否 | 共用材料；同一材料的多题分别填写材料内容和图片引用 |
+| `material` | 否 | 旧格式的内联材料；新材料题建议用 `materials` 和 `materialId` 统一关联 |
+| `materials` | 否 | 顶层共用材料数组，每项包含稳定的 `id`、纯文本 `text` 和可选 `images` |
+| `materialId` | 否 | 小题引用的材料 ID，须与 `materialOrder` 一起提供 |
+| `materialOrder` | 否 | 在这篇材料中的小题序号，从 1 开始连续排列，最多 100 道 |
 | `options` | 是 | 从 A 连续排列的 2—6 个选项，例如 `{"A":"…","B":"…"}` |
 | `answer` | 是 | 一个选项字母，必须存在于 `options`；当前导入只支持单选题 |
 | `analysis` | 是 | 非空解析文本；答案和解析由提供者负责校对 |
@@ -54,6 +57,35 @@
 | `knowledgePoints` | 否 | 知识点文字数组 |
 
 所有正文按纯文本处理，换行保留，HTML 会转义。需要公式时可使用文本表达式，或把公式图片放入对应位置。这里的标准 JSON 与内部 JSONL 是两层格式，不要把它们直接互换。
+
+## 一份材料，多道小题
+
+材料文字和图片在顶层 `materials` 中录入一次，小题通过 `materialId` 关联，并用 `materialOrder` 明确顺序。完整三题范例见 [materials.json](../examples/question-bank/materials.json)。
+
+```json
+{
+  "schemaVersion": "1.0",
+  "bankId": "reading-demo",
+  "materials": [{"id": "survey", "text": "调查共 200 人，其中纸质阅读 120 人。"}],
+  "questions": [
+    {
+      "id": "share", "module": "资料分析", "materialId": "survey", "materialOrder": 1,
+      "stem": "纸质阅读占比是多少？", "options": {"A": "40%", "B": "60%"},
+      "answer": "B", "analysis": "120 ÷ 200 = 60%。"
+    }
+  ]
+}
+```
+
+材料可只包含图片，例如 `{"id":"chart","images":[{"path":"images/chart.png"}]}`。这里的图片自动归入 `material` 位置；小题自己的 `images` 继续用于题干、选项和解析。引用共用材料的小题不能再填写内联 `material` 或材料位置的图片，避免两份材料互相覆盖。材料 ID 须唯一且被引用；每篇材料的小题序号须唯一、连续，整组应放在同一次导入中。
+
+工具按 `bankId` 和材料 ID 生成稳定的内部 `material_id`，将完整材料和材料图片写入每一道小题，并将小题序号记入 `occurrences[].question_number`。同一材料在不同题库命名空间中互不混淆；同一文件重复导入可复用原记录和图片。增量合并时同样检查材料内容一致性和小题顺序；修订材料须使用新的材料 ID，修订小题仍须遵循下文的题目 ID 冲突规则。
+
+旧的 `questions[].material` 和材料图片格式继续有效，编译结果保持原样，已有资源包不需要重写；后续新增材料题推荐使用上述关联格式。
+
+```bash
+npm run questions:import -- --input=examples/question-bank/materials.json --check
+```
 
 ## 图片
 
