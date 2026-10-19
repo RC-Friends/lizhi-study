@@ -79,6 +79,8 @@ kubectl -n xingce get service frontend
 
 只在受信任的局域网使用 HTTP LoadBalancer；公网使用已有 HTTPS 入口或 TLS 终结代理。临时预览可运行 `kubectl -n xingce port-forward service/frontend 3210:80`。这些命令都是范例，本地准备不会执行它们。
 
+应用 Deployment 使用 `maxUnavailable: 0`，新增 Pod 就绪稳定 5 秒后才替换旧 Pod；退出前等待 10 秒，让 Service 端点传播后再停止服务。首次给没有退出等待的旧部署升级时，仍应监测实际请求；新模板不能改变已经运行的旧 Pod 生命周期。流式连接断开后由前端自动重连。
+
 SeaweedFS 使用 headless Service，单容器 `weed mini` 可通过 Pod 地址访问自己的内部组件。PVC 配置未绑定特定供应商；数据库和对象存储使用 Recreate 策略，避免两个单实例进程同时访问同一数据卷。五服务方案是易部署的单机数据服务布局，后端多副本不等于 PostgreSQL、Redis 或 SeaweedFS 高可用。
 
 ## 资源版本与发布

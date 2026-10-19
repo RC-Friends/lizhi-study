@@ -10,7 +10,7 @@ COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json ./
 COPY server ./server
 COPY schema ./schema
-COPY scripts/import-legacy.mjs scripts/package-resources.mjs scripts/upload-resources.mjs scripts/import-questions.mjs scripts/publish-question-import.mjs ./scripts/
+COPY scripts/import-legacy.mjs scripts/package-resources.mjs scripts/upload-resources.mjs scripts/import-questions.mjs scripts/publish-question-import.mjs scripts/repair-material-groups.mjs ./scripts/
 USER node
 EXPOSE 3210
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \

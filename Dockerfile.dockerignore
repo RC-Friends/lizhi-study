@@ -24,3 +24,4 @@
 !schema/**
 !scripts/import-questions.mjs
 !scripts/publish-question-import.mjs
+!scripts/repair-material-groups.mjs

@@ -134,6 +134,22 @@ npm run questions:import -- --input=my-bank/questions.json \
 
 `--check` 不写资源包，会校验结构、图片文件和合并冲突。发生错误时退出码为 1，输出带 `issues[].path` 的 JSON。它不会连接数据库、S3 或模型。
 
+## 整理现有材料题的分组和顺序
+
+对已有的完整资源包，可以先审计，再生成整理后的新版本：
+
+```bash
+npm run questions:repair-materials -- --source=artifacts/current-bank --check
+npm run questions:repair-materials -- --source=artifacts/current-bank \
+  --output=artifacts/ordered-bank --report=artifacts/material-order-report.json
+```
+
+工具将同一材料的小题连续存放，并按原卷题号排序。同一材料在多份试卷中的小题集合不同时，以覆盖小题最多的原卷为主序，再稳定追加其他来源的小题；覆盖数相同按来源标识确定顺序。没有原卷题号的旧材料保留输入顺序。正文冲突会停止处理，不能据此猜测缺失材料或改写答案。
+
+整理只改变 JSONL 中记录的排列和序列化，不修改任何原题对象。会逐题核对完整内容摘要，保留全部 ID、材料、答案、图片和来源；再次整理得到同一资源版本。已有成绩、错题、笔记及正在作答的试卷仍引用原题，试卷顺序不会改变。审计报告放在资源包外，不随题库接口公开。
+
+确认报告后，可用下文的发布接口启用新资源包；必须同时使用支持材料整组练习的应用版本。
+
 ## 启用管理 API
 
 命令行导入使用以下三个**独立的管理员变量**；网页管理面板也可用超级管理员 JWT 调用同一套接口：

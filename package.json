@@ -28,6 +28,7 @@
     "release:assets": "node scripts/ci/release-assets.mjs",
     "questions:import": "node scripts/import-questions.mjs",
     "questions:publish": "node scripts/publish-question-import.mjs",
+    "questions:repair-materials": "node scripts/repair-material-groups.mjs",
     "test:imports": "node --test tests/integration/question-import.test.mjs"
   },
   "dependencies": {

@@ -144,7 +144,18 @@
                     "name": "tmp",
                     "mountPath": "/tmp"
                   }
-                ]
+                ],
+                "lifecycle": {
+                  "preStop": {
+                    "exec": {
+                      "command": [
+                        "/bin/sh",
+                        "-c",
+                        "sleep 10"
+                      ]
+                    }
+                  }
+                }
               }
             ],
             "volumes": [
@@ -163,7 +174,8 @@
             "maxSurge": 1,
             "maxUnavailable": 0
           }
-        }
+        },
+        "minReadySeconds": 5
       }
     },
     {
@@ -276,7 +288,18 @@
                     "name": "tmp",
                     "mountPath": "/tmp"
                   }
-                ]
+                ],
+                "lifecycle": {
+                  "preStop": {
+                    "exec": {
+                      "command": [
+                        "/bin/sh",
+                        "-c",
+                        "sleep 10"
+                      ]
+                    }
+                  }
+                }
               }
             ],
             "volumes": [
@@ -295,7 +318,8 @@
             "maxSurge": 1,
             "maxUnavailable": 0
           }
-        }
+        },
+        "minReadySeconds": 5
       }
     }
   ]

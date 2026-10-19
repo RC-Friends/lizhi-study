@@ -12,11 +12,19 @@ import { question, config, settings } from './fixtures.mjs';
 // Self-contained synthetic materials: no real bank, saved account or provider.
 const rows = [['a', 3], ['b', 2]].flatMap(([key, count]) => Array.from({ length: count }, (_, i) => ({
   ...question, id: `${key}_${i}`, material_id: key, material: `材料 ${key}`,
-  material_html: Array.from({ length: 40 }, (_, j) => `<p>材料 ${key} 第 ${j + 1} 段：这是一份用于验收连续作答的合成材料，可上下翻阅并对照小题。</p>`).join(''),
+  material_html: key === 'a' ? '<p>材料 a：对照长图，连续完成三道小题。</p><img src="assets/images/material.svg" alt="合成材料表格">'
+    : Array.from({ length: 40 }, (_, j) => `<p>材料 ${key} 第 ${j + 1} 段：这是一份用于验收连续作答的合成材料，可上下翻阅并对照小题。</p>`).join(''),
+  images: key === 'a' ? [{ path: 'assets/images/material.svg', role: 'material', kind: 'image', width: 800, height: 1800 }] : [],
   stem_html: `<p>材料 ${key} 的第 ${i + 1} 小题：两本练习册共多少钱？</p>`,
 })));
 const bank = new QuestionBank(null, rows);
-const isolated = { ...config, llm: { key: '' }, jev: { key: '' }, vision: { key: '', enabled: false } };
+const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'lizhi-material-browser-'));
+const imagesPath = path.join(temporary, 'images'); await fs.mkdir(imagesPath);
+const chart = '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1800"><rect width="800" height="1800" fill="#eef3e4"/>'
+  + Array.from({ length: 30 }, (_, i) => `<rect x="30" y="${25 + i * 57}" width="740" height="45" fill="${i % 2 ? '#fff' : '#dce7cc'}"/><text x="50" y="${56 + i * 57}" font-size="24" fill="#345037">ROW ${i + 1}: ${100 + i * 5}</text>`).join('') + '</svg>';
+await fs.writeFile(path.join(imagesPath, 'material.svg'), chart);
+const isolated = { ...config, runtimePath: path.join(temporary, 'runtime'), imagesPath,
+  llm: { key: '' }, jev: { key: '' }, vision: { key: '', enabled: false } };
 const service = new MatchService(bank, isolated, { persist: false });
 const app = createApp(bank, service, isolated);
 const candidates = [process.env.BROWSER_PATH, '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome',
@@ -58,22 +66,33 @@ try {
       await context.request.post(`${base}/api/matches/${normalId}/finish`, { headers, data: {} });
 
       const response = await context.request.post(`${base}/api/matches`, { headers,
-        data: { ...settings, mode: 'practice', count: 2, questionIds: ['a_1', 'b_0'] } });
+        data: { ...settings, mode: 'practice', images: 'mixed', count: 2, questionIds: ['a_1', 'b_0'] } });
       assert.equal(response.status(), 201);
       const { match } = await response.json(); assert.equal(match.count, 5);
       await page.goto(`${base}/#match/${match.id}`);
       await page.locator('.material-panel summary').filter({ hasText: '第 1 / 3 小题' }).waitFor();
-      await page.locator('.material-panel .rich-text').evaluate(el => { el.scrollTop = 220; window.__materialNode = el; });
+      await page.waitForFunction(() => [...document.querySelectorAll('.material-panel img')].every(image => image.complete && image.naturalWidth > 0));
+      await page.locator('.material-panel .rich-text').evaluate(el => {
+        el.scrollTop = 220; window.__materialNode = el; window.__materialMutations = 0;
+        new MutationObserver(() => window.__materialMutations++).observe(el, { childList: true, subtree: true });
+      });
+      // A live timer tick must preserve the image DOM and reading position.
+      await page.waitForTimeout(250);
+      assert.equal(await page.locator('.material-panel .rich-text').evaluate(el => el.scrollTop), 220);
       for (let i = 0; i < 3; i++) {
         await page.locator('.material-panel summary').filter({ hasText: `第 ${i + 1} / 3 小题` }).waitFor();
         if (i > 0) {
           assert.ok(await page.locator('.material-panel .rich-text').evaluate(el => el === window.__materialNode));
           assert.equal(await page.locator('.material-panel .rich-text').evaluate(el => el.scrollTop), 220);
+          assert.equal(await page.evaluate(() => window.__materialMutations), 0);
         }
         if (i === 1) {
           assert.ok(await page.locator('.material-panel .rich-text').innerText().then(value => value.includes('材料 a')));
           assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
           await page.screenshot({ path: path.join(output, `${name}-same-material.png`), fullPage: true });
+          // Chromium's full-page capture can scroll nested image containers.
+          // Restore the observation state before testing the next user action.
+          await page.locator('.material-panel .rich-text').evaluate(el => { el.scrollTop = 220; });
         }
         if (i === 2) await page.locator('.material-panel summary').click();
         await page.locator('.answer-option').nth(3).click();
@@ -103,4 +122,5 @@ try {
   assert.deepEqual(errors, []);
 } finally {
   await browser?.close(); app.locals.coach.shutdown(); service.shutdown(); server.closeAllConnections(); server.close();
+  await fs.rm(temporary, { recursive: true, force: true });
 }

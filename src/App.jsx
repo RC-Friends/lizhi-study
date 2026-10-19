@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import DOMPurify from 'dompurify';
 import renderMathInElement from 'katex/contrib/auto-render';
 import 'katex/dist/katex.min.css';
@@ -22,11 +22,13 @@ function Brand({ onClick }) {
   return <button className="brand" onClick={onClick} aria-label="返回学习中心"><span className="brand-symbol"><ScanLine size={22} strokeWidth={2.4} /></span><span>栗知自习室<span className="brand-en">ONE QUESTION, ONE STEP</span></span><span className="beta">BETA</span></button>;
 }
 function Rich({ html, className = '', onImage }) {
-  const clean = DOMPurify.sanitize(html || '', { USE_PROFILES: { html: true, mathMl: true }, FORBID_TAGS: ['style', 'iframe', 'svg'], FORBID_ATTR: ['style', 'srcset'] });
+  const markup = useMemo(() => ({ __html: DOMPurify.sanitize(html || '', {
+    USE_PROFILES: { html: true, mathMl: true }, FORBID_TAGS: ['style', 'iframe', 'svg'], FORBID_ATTR: ['style', 'srcset'],
+  }) }), [html]);
   return <div className={`rich-text ${className}`} onClick={event => {
     const target = event.target;
     if (target.tagName === 'IMG' && onImage) onImage(target.src);
-  }} dangerouslySetInnerHTML={{ __html: clean }} />;
+  }} dangerouslySetInnerHTML={markup} />;
 }
 function Explanation({ text, className = '' }) {
   const ref = useRef(null);
