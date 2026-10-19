@@ -3,7 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { compileImport, validateImport, inspectImage, parseQuestionLines, validateCanonical, ImportError, IMPORT_LIMITS } from '../server/question-import.mjs';
+import { compileImport, validateImport, importImages, inspectImage, parseQuestionLines, validateCanonical, ImportError, IMPORT_LIMITS } from '../server/question-import.mjs';
 import { packageResources } from './package-resources.mjs';
 import { verifyResources, resolveQuestionImage, questionFingerprint } from '../server/resources.mjs';
 
@@ -12,7 +12,7 @@ export function prepareQuestionImport({ input, output, base, check = false }) {
   let document;
   try { document = JSON.parse(fs.readFileSync(input, 'utf8')); } catch { throw new ImportError([{ path: '', message: '输入文件不是合法的 JSON。' }]); }
   const summary = validateImport(document), root = fs.realpathSync(path.dirname(input)), imageInfo = new Map(), sources = new Map();
-  for (const image of document.questions.flatMap(q => q.images || [])) {
+  for (const image of importImages(document)) {
     if (imageInfo.has(image.path)) continue;
     let filename;
     try { filename = fs.realpathSync(path.resolve(root, image.path)); } catch { throw new ImportError([{ path: image.path, message: '找不到图片文件。' }]); }

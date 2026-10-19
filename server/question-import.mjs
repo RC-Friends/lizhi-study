@@ -5,12 +5,17 @@ import { imageSize } from 'image-size';
 import { HttpError, QuestionBank } from './bank.mjs';
 import { sha256, questionFingerprint } from './resources.mjs';
 
-export const IMPORT_LIMITS = Object.freeze({ documentBytes: 64 * 1024 * 1024, bankBytes: 128 * 1024 * 1024,
-  imageBytes: 16 * 1024 * 1024, files: 20000, totalBytes: 512 * 1024 * 1024 });
 export const importSchema = JSON.parse(fs.readFileSync(new URL('../schema/question-import.schema.json', import.meta.url)));
+export const IMPORT_LIMITS = Object.freeze({ documentBytes: 64 * 1024 * 1024, bankBytes: 128 * 1024 * 1024,
+  imageBytes: 16 * 1024 * 1024, files: 20000, totalBytes: 512 * 1024 * 1024,
+  materialQuestions: importSchema.$defs.question.properties.materialOrder.maximum });
 const canonicalSchema = JSON.parse(fs.readFileSync(new URL('../schema/question.schema.json', import.meta.url)));
 const ajv = new Ajv({ allErrors: true, strict: false });
 const validateInput = ajv.compile(importSchema), validateRecord = ajv.compile(canonicalSchema);
+const IMPORT_ORIGIN = 'question-import/1.0';
+const materialImages = material => (material?.images || []).map(image => ({ ...image, role: 'material' }));
+const completeMaterialOrder = positions => positions.size > 0 && positions.size <= IMPORT_LIMITS.materialQuestions
+  && [...positions].every(position => Number.isInteger(position) && position >= 1 && position <= positions.size);
 export class ImportError extends HttpError {
   constructor(issues, status = 422, code = 'invalid_question_import') {
     super(status, '题库校验未通过，请根据 issues 修正后重试。', code);
@@ -26,14 +31,37 @@ export function importPath(value) {
     && !value.startsWith('/') && !value.split('/').some(p => !p || p === '.' || p === '..')
     && /\.(png|jpe?g|gif|webp|bmp)$/i.test(value);
 }
+export function importImages(document) {
+  return [...document.questions.flatMap(q => q.images || []),
+    ...(document.materials || []).flatMap(materialImages)];
+}
 export function validateImport(document) {
   const errors = schemaIssues(validateInput, document);
   if (errors.length) throw new ImportError(errors);
-  const ids = new Set(), images = new Set(), modules = {};
+  const ids = new Set(), images = new Set(), modules = {}, materials = new Map(), orders = new Map();
+  for (const [i, material] of (document.materials || []).entries()) {
+    const root = `/materials/${i}`, refs = material.images || [], paths = new Set();
+    if (materials.has(material.id)) errors.push(issue(root + '/id', '材料 ID 重复。'));
+    materials.set(material.id, material);
+    if (!(material.text || '').trim() && !refs.length) errors.push(issue(root, '材料须包含非空文字或图片。'));
+    for (const [j, image] of refs.entries()) {
+      if (!importPath(image.path)) errors.push(issue(`${root}/images/${j}/path`, '材料图片须为资源目录内的相对路径。'));
+      if (paths.has(image.path)) errors.push(issue(`${root}/images/${j}`, '材料图片引用重复。'));
+      paths.add(image.path); images.add(image.path);
+    }
+  }
   for (const [i, q] of document.questions.entries()) {
     const root = `/questions/${i}`, refs = q.images || [], roles = new Set(refs.map(r => r.role));
     if (ids.has(q.id)) errors.push(issue(root + '/id', '题目 ID 重复。'));
     ids.add(q.id); modules[q.module] = (modules[q.module] || 0) + 1;
+    if (q.materialId !== undefined) {
+      if (!materials.has(q.materialId)) errors.push(issue(root + '/materialId', '引用的材料不存在。'));
+      if (q.material !== undefined || refs.some(image => image.role === 'material')) errors.push(issue(root, '引用共用材料时，请将材料文字和材料图片统一放入 materials。'));
+      if (!orders.has(q.materialId)) orders.set(q.materialId, new Set());
+      const positions = orders.get(q.materialId);
+      if (positions.has(q.materialOrder)) errors.push(issue(root + '/materialOrder', '同一材料的小题序号重复。'));
+      positions.add(q.materialOrder);
+    }
     if (!q.stem.trim() || !q.analysis.trim()) errors.push(issue(root, '题干与解析不能仅包含空白。'));
     if (!Object.hasOwn(q.options, q.answer)) errors.push(issue(root + '/answer', '答案不在选项中。'));
     const labels = Object.keys(q.options).sort();
@@ -53,6 +81,13 @@ export function validateImport(document) {
     }
     if (errors.length >= 100) break;
   }
+  for (const [i, material] of (document.materials || []).entries()) {
+    const positions = orders.get(material.id);
+    if (!positions) errors.push(issue(`/materials/${i}`, '材料未关联任何小题。'));
+    else if (!completeMaterialOrder(positions)) {
+      errors.push(issue(`/materials/${i}`, `每篇材料须关联 1—${IMPORT_LIMITS.materialQuestions} 道小题，序号从 1 开始连续排列。`));
+    }
+  }
   if (errors.length) throw new ImportError(errors);
   return { valid: true, schemaVersion: '1.0', bankId: document.bankId, questions: document.questions.length, images: images.size, modules };
 }
@@ -69,9 +104,11 @@ export function inspectImage(bytes, name) {
 const escape = text => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 export function compileImport(document, imageInfo) {
   validateImport(document);
+  const materials = new Map((document.materials || []).map(material => [material.id, material]));
   return document.questions.map(q => {
     const source = q.source || {};
-    const images = (q.images || []).map(image => {
+    const material = materials.get(q.materialId);
+    const images = [...(q.images || []), ...materialImages(material)].map(image => {
       const meta = imageInfo.get(image.path);
       if (!meta) throw new ImportError([issue(image.path, '缺少本地图片。')]);
       return { path: meta.path, role: image.role, kind: image.kind || 'image', width: meta.width, height: meta.height };
@@ -83,12 +120,16 @@ export function compileImport(document, imageInfo) {
     return {
       id: 'xc_' + sha256(document.bankId + ':' + q.id).slice(0, 24), schema_version: '1.0', module: q.module,
       submodule: q.submodule || '', source_type: source.type || '模拟题', question_type: 'single', answer: [q.answer],
-      images, has_image: images.length > 0, material_id: null, classification_basis: 'source_category', year, province,
+      images, has_image: images.length > 0,
+      material_id: material ? 'mat_' + sha256(document.bankId + ':material:' + material.id).slice(0, 24) : null,
+      classification_basis: 'source_category', year, province,
       years: year === null ? [] : [year], provinces: province ? [province] : [], difficulty: null, accuracy: null,
       source_reviewed: null, answer_verification: 'source_only', charts: [],
-      occurrences: [{ dataset: document.bankId, source_id: q.id, source_url: source.url || '', raw_path: 'question-import/1.0',
-        paper_title: source.title || document.bankId, province, year }],
-      stem: text(q.stem, 'stem'), stem_html: html(q.stem, 'stem'), material: text(q.material, 'material'), material_html: html(q.material, 'material'),
+      occurrences: [{ dataset: document.bankId, source_id: q.id, source_url: source.url || '', raw_path: IMPORT_ORIGIN,
+        paper_title: source.title || document.bankId, province, year,
+        ...(material ? { question_number: q.materialOrder } : {}) }],
+      stem: text(q.stem, 'stem'), stem_html: html(q.stem, 'stem'),
+      material: text(material ? material.text : q.material, 'material'), material_html: html(material ? material.text : q.material, 'material'),
       analysis: text(q.analysis, 'analysis'), analysis_html: html(q.analysis, 'analysis'),
       tags: [...new Set([...(q.tags || []).filter(t => t !== 'has_image'), ...(images.length ? ['has_image'] : [])])],
       quality_flags: [], knowledge_points: q.knowledgePoints || [],
@@ -108,8 +149,18 @@ export function parseQuestionLines(bytes) {
   }
   return rows;
 }
+function validateCanonicalMaterial(q, root, materials, errors) {
+  // Legacy records without explicit imported order keep their original behavior.
+  const position = q.occurrences.find(o => o.raw_path === IMPORT_ORIGIN && Number.isInteger(o.question_number))?.question_number;
+  if (!q.material_id || position === undefined) return;
+  if (!materials.has(q.material_id)) materials.set(q.material_id, { text: q.material, html: q.material_html, positions: new Set() });
+  const material = materials.get(q.material_id);
+  if (material.text !== q.material || material.html !== q.material_html) errors.push(issue(root + '/material_id', '同一材料 ID 对应内容不一致，修订材料请使用新的材料 ID。'));
+  if (material.positions.has(position)) errors.push(issue(root + '/occurrences', '同一材料的小题序号重复。'));
+  material.positions.add(position);
+}
 export function validateCanonical(rows, { activeBank, activeFingerprints = activeBank?.fingerprints } = {}) {
-  const errors = [], ids = new Set(), refs = new Map();
+  const errors = [], ids = new Set(), refs = new Map(), materials = new Map();
   if (!Array.isArray(rows) || !rows.length || rows.length > 50000) throw new ImportError([issue('', '资源包必须包含 1—50000 道题。')]);
   for (const [i, q] of rows.entries()) {
     const root = `/questions/${i}`, shape = schemaIssues(validateRecord, q, root);
@@ -119,6 +170,7 @@ export function validateCanonical(rows, { activeBank, activeFingerprints = activ
     if (!q.stem.trim() || !q.analysis.trim() || q.answer.some(k => !Object.hasOwn(q.options, k))
       || q.question_type === 'single' && q.answer.length !== 1 || Object.keys(q.options).sort().join() !== Object.keys(q.options_html).sort().join()) errors.push(issue(root, '题干、解析、选项或答案不一致。'));
     if (q.has_image !== Boolean(q.images.length) || q.tags.includes('has_image') !== q.has_image) errors.push(issue(root + '/images', '图片标记不一致。'));
+    validateCanonicalMaterial(q, root, materials, errors);
     const expected = new Set(q.images.map(image => image.role + ':' + image.path)), actual = new Set();
     for (const image of q.images) {
       const previous = refs.get(image.path);
@@ -137,6 +189,11 @@ export function validateCanonical(rows, { activeBank, activeFingerprints = activ
     }
     if (expected.size !== actual.size || [...actual].some(ref => !expected.has(ref))) errors.push(issue(root + '/images', 'HTML 图片引用与 images 索引不一致。'));
     if (errors.length >= 100) break;
+  }
+  for (const [id, material] of materials) {
+    if (!completeMaterialOrder(material.positions)) {
+      errors.push(issue('/questions', `材料 ${id} 须包含 1—${IMPORT_LIMITS.materialQuestions} 道序号从 1 开始连续排列的小题。`));
+    }
   }
   if (!errors.length && activeFingerprints) {
     const next = new Map(rows.map(q => [q.id, q]));
