@@ -1,8 +1,8 @@
 export const question = {
   id: 'test_question', module: '数量关系', submodule: '数学运算', question_type: 'single',
   source_type: '模拟题', year: 2025, province: '模拟', quality_flags: [],
-  stem: '两本练习册共多少钱？', stem_html: '<p>两本练习册共多少钱？</p>',
-  material: '每本练习册 12 元。', material_html: '<p>每本练习册 12 元。</p>',
+  stem: '每本练习册 12 元，两本练习册共多少钱？', stem_html: '<p>每本练习册 12 元，两本练习册共多少钱？</p>',
+  material: '', material_html: '',
   options: { A: '12 元', B: '18 元', C: '20 元', D: '24 元' },
   options_html: { A: '12 元', B: '18 元', C: '20 元', D: '24 元' },
   answer: ['D'], analysis: 'GOLD_SECRET_NEVER_SEND', analysis_html: '<p>GOLD_SECRET_NEVER_SEND：12×2=24。</p>',

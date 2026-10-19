@@ -10,6 +10,18 @@ export function questionImages(question) {
   return [...new Map(question.images.filter(image => image.role !== 'analysis').map(image => [image.path, image])).values()];
 }
 export const localHtml = value => (value || '').replace(/(src=["'])assets\/images\//g, '$1/assets/images/');
+const shuffle = array => { for (let i = array.length - 1; i > 0; i--) { const j = crypto.randomInt(i + 1); [array[i], array[j]] = [array[j], array[i]]; } return array; };
+const validateCount = count => {
+  if (!Number.isInteger(count) || count < 1 || count > 100) throw new HttpError(400, '题量须为 1—100 道整数。');
+};
+const materialKey = q => {
+  const content = q.material_html?.trim() || q.material?.trim() || '';
+  return q.material_id ? `id:${q.material_id}` : content
+    ? `content:${crypto.createHash('sha256').update(content).digest('hex')}` : `question:${q.id}`;
+};
+const paperKey = occurrence => occurrence.raw_path === 'question-import/1.0' && Number.isInteger(occurrence.question_number)
+  ? JSON.stringify(['import-material', occurrence.dataset])
+  : JSON.stringify([occurrence.dataset, occurrence.paper_title, occurrence.source_url]);
 
 export class QuestionBank {
   constructor(filename, suppliedRows) {
@@ -18,6 +30,25 @@ export class QuestionBank {
     this.byId = new Map(this.rows.map(question => [question.id, question]));
     if (this.byId.size !== this.rows.length) throw new Error('题库存在重复题目 ID。');
     this.fingerprints = new Map(this.rows.map(q => [q.id, questionFingerprint(q)]));
+    this.materialKeys = new Map(this.rows.map(q => [q.id, materialKey(q)]));
+    this.materials = new Map();
+    for (const q of this.rows) {
+      const key = this.materialKeys.get(q.id);
+      if (!this.materials.has(key)) this.materials.set(key, []);
+      this.materials.get(key).push(q.id);
+    }
+    // Use the original paper's question order when all members share one.
+    for (const ids of this.materials.values()) {
+      for (const occurrence of this.byId.get(ids[0]).occurrences || []) {
+        if (!Number.isInteger(occurrence.question_number) || occurrence.question_number < 1) continue;
+        const key = paperKey(occurrence), numbers = new Map();
+        for (const id of ids) {
+          const item = this.byId.get(id).occurrences?.find(o => paperKey(o) === key && Number.isInteger(o.question_number) && o.question_number > 0);
+          if (item) numbers.set(id, item.question_number);
+        }
+        if (numbers.size === ids.length) { ids.sort((a, b) => numbers.get(a) - numbers.get(b)); break; }
+      }
+    }
   }
   catalog() {
     return {
@@ -36,26 +67,50 @@ export class QuestionBank {
       && (source === 'all' || q.source_type === (source === 'real' ? '真题' : '模拟题'))
       && (images === 'mixed' || (questionImages(q).length > 0) === (images === 'visual')));
   }
+  eligibleGroups(settings, { allowedQuestionIds = null } = {}) {
+    const permitted = new Set(this.eligible(settings).map(q => q.id));
+    const seeds = allowedQuestionIds === null ? null : new Set(allowedQuestionIds);
+    // Scope selects materials through matching questions. Hard filters must
+    // hold for every member; omit incompatible or oversized groups intact.
+    return [...this.materials.values()].filter(ids => ids.length <= 100 && ids.every(id => permitted.has(id))
+      && (!seeds || ids.some(id => seeds.has(id))));
+  }
+  selectGroups(groups, count) {
+    validateCount(count);
+    const available = groups.reduce((total, ids) => total + ids.length, 0);
+    if (available < count) throw new HttpError(400, `当前条件只有 ${available} 道题可整组抽取，请减少题量或放宽筛选。`);
+    // Preserve sampling/ranking priority, completing the last selected group
+    // even if it crosses the target. Skip groups that exceed the hard cap.
+    const picked = [];
+    for (const group of groups) {
+      if (picked.length + group.length > 100) continue;
+      picked.push(...group);
+      if (picked.length >= count) break;
+    }
+    return picked;
+  }
   draw(settings, selection = {}) {
     const { modules, count } = settings;
-    if (!Number.isInteger(count) || count < 1 || count > 100) throw new HttpError(400, '题量须为 1—100 道整数。');
-    const eligible = this.eligible(settings, selection);
+    validateCount(count);
+    const groups = this.eligibleGroups(settings, selection);
     if (selection.requestedQuestionIds !== undefined) {
       const ids = selection.requestedQuestionIds;
-      if (!Array.isArray(ids) || ids.length !== count || ids.some(id => typeof id !== 'string') || new Set(ids).size !== ids.length) throw new HttpError(400, '指定题目须去重且与题量一致。');
-      const permitted = new Set(eligible.map(q => q.id));
+      if (!Array.isArray(ids) || !ids.length || ids.length > 100 || ids.some(id => typeof id !== 'string') || new Set(ids).size !== ids.length) throw new HttpError(400, '指定题目须去重且为 1—100 道。');
+      const permitted = new Set(groups.flat());
       if (ids.some(id => !permitted.has(id))) throw new HttpError(400, '指定题目不符合当前练习范围或筛选条件。');
-      return [...ids];
+      const selected = [...new Set(ids.map(id => this.materialKeys.get(id)))].flatMap(key => this.materials.get(key));
+      if (selected.length > 100) throw new HttpError(400, `指定材料共有 ${selected.length} 道题，超过 100 道上限，请减少材料。`);
+      return selected;
     }
-    if (eligible.length < count) throw new HttpError(400, `当前条件只有 ${eligible.length} 道题，请减少题量或放宽筛选。`);
-    // Randomize within each module, then rotate modules for a balanced paper.
-    const shuffle = array => { for (let i = array.length - 1; i > 0; i--) { const j = crypto.randomInt(i + 1); [array[i], array[j]] = [array[j], array[i]]; } return array; };
-    const buckets = shuffle(modules.map(module => shuffle(eligible.filter(q => q.module === module))));
-    const selected = [];
-    while (selected.length < count) {
-      for (const bucket of buckets) { if (bucket.length && selected.length < count) selected.push(bucket.pop().id); }
+    const buckets = shuffle(modules.map(module => ({ module, count: 0,
+      groups: shuffle(groups.filter(ids => this.byId.get(ids[0]).module === module)) })));
+    const ordered = [];
+    while (buckets.some(bucket => bucket.groups.length)) {
+      const bucket = buckets.filter(bucket => bucket.groups.length).sort((a, b) => a.count - b.count)[0];
+      const group = bucket.groups.pop(); ordered.push(group); bucket.count += group.length;
     }
-    return shuffle(selected);
+    const selected = this.selectGroups(ordered, count);
+    return shuffle([...new Set(selected.map(id => this.materialKeys.get(id)))]).flatMap(key => this.materials.get(key));
   }
   publicQuestion(id) {
     const q = this.byId.get(id);
@@ -63,6 +118,7 @@ export class QuestionBank {
     // Explicit allowlist: never serialize the source record into an unfinished round.
     return { id: q.id, module: q.module, submodule: q.submodule, sourceType: q.source_type,
       year: q.year, province: q.province, stemHtml: localHtml(q.stem_html), materialHtml: localHtml(q.material_html),
+      materialId: this.materialKeys.get(q.id),
       options: Object.entries(q.options_html).map(([label, content]) => ({ label, html: localHtml(content) })),
       hasImages: questionImages(q).length > 0, imageCount: questionImages(q).length };
   }

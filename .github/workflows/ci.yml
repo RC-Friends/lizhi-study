@@ -48,6 +48,7 @@ jobs:
       - run: npx --no-install playwright-core install --with-deps chromium
       - run: npm run build
       - run: node scripts/ci/frontend-assets.mjs
+      - run: npm run test:materials
       - run: npm run test:rag
       - run: npm run test:ci-stack
       - name: Save browser evidence only
@@ -62,5 +63,6 @@ jobs:
             test-results/rag-*.png
             test-results/rag-results.json
             test-results/rag-failure.json
+            test-results/materials/*.png
           retention-days: 7
           if-no-files-found: ignore
